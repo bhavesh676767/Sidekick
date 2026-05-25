@@ -2,18 +2,28 @@
   "manifest_version": 3,
   "name": "Sidekick",
   "version": "1.0.0",
-  "description": "AI browser assistant",
+  "description": "AI browser assistant — control the web with text commands",
   "permissions": [
     "activeTab",
     "tabs",
-    "storage",
-    "scripting"
+    "scripting",
+    "storage"
   ],
   "host_permissions": [
     "<all_urls>"
   ],
   "action": {
-    "default_popup": "index.html"
+    "default_popup": "index.html",
+    "default_icon": {
+      "16": "sidekick_logo.png",
+      "48": "sidekick_logo.png",
+      "128": "sidekick_logo.png"
+    }
+  },
+  "icons": {
+    "16": "sidekick_logo.png",
+    "48": "sidekick_logo.png",
+    "128": "sidekick_logo.png"
   },
   "background": {
     "service_worker": "background.js"
