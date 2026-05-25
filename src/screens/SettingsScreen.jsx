@@ -144,6 +144,56 @@ export const SettingsScreen = ({
             </div>
           </Card>
 
+{/* API Provider Configuration */}
+<Card className="mb-4">
+  <div className="flex items-center justify-between">
+    <div className="flex-1">
+      <h3 className="font-semibold text-black mb-1">AI Provider</h3>
+      <p className="text-xs text-gray-500">Select API provider and configure key</p>
+    </div>
+    <select
+      value={settings.apiProvider || 'groq'}
+      onChange={(e) => toggleSetting('apiProvider', e.target.value)}
+      className="bg-gray-200 text-black rounded p-1"
+    >
+      <option value="groq">Groq</option>
+      <option value="openrouter">OpenRouter</option>
+    </select>
+  </div>
+</Card>
+
+<Card className="mb-4">
+  <div className="flex items-center justify-between">
+    <div className="flex-1">
+      <h3 className="font-semibold text-black mb-1">Groq API Key</h3>
+      <p className="text-xs text-gray-500">Enter your Groq API secret</p>
+    </div>
+    <input
+      type="password"
+      value={settings.groqApiKey || ''}
+      onChange={(e) => toggleSetting('groqApiKey', e.target.value)}
+      placeholder="groq-..."
+      className="w-40 p-1 border rounded bg-gray-100 text-black"
+    />
+  </div>
+</Card>
+
+<Card className="mb-4">
+  <div className="flex items-center justify-between">
+    <div className="flex-1">
+      <h3 className="font-semibold text-black mb-1">OpenRouter API Key</h3>
+      <p className="text-xs text-gray-500">Enter your OpenRouter API secret</p>
+    </div>
+    <input
+      type="password"
+      value={settings.openRouterApiKey || ''}
+      onChange={(e) => toggleSetting('openRouterApiKey', e.target.value)}
+      placeholder="or-..."
+      className="w-40 p-1 border rounded bg-gray-100 text-black"
+    />
+  </div>
+</Card>
+
           <Card>
             <div className="flex items-center justify-between">
               <div className="flex-1">

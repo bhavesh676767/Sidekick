@@ -2,33 +2,50 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Chrome extension popup sizing — prevents full-page layout */
+/* Strict Chrome extension sizing boundaries */
 html, body {
   width: 360px;
   height: 520px;
   margin: 0;
   padding: 0;
   overflow: hidden;
+  background-color: #000000;
+  color: #ffffff;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 #root {
   width: 360px;
   height: 520px;
-}
-@layer base {
-  body {
-    @apply bg-white text-black;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
-      Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-  }
+  overflow: hidden;
+  position: relative;
 }
 
-@keyframes slide-in {
+/* Premium B&W Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.4);
+}
+
+/* Subtle micro-animations for interactive excellence */
+@keyframes slide-up {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
@@ -36,6 +53,41 @@ html, body {
   }
 }
 
-.animate-slide-in {
-  animation: slide-in 0.25s ease-out;
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes spin-slow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-slide-up {
+  animation: slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.25s ease-out forwards;
+}
+
+.animate-spin-slow {
+  animation: spin-slow 12s linear infinite;
+}
+
+/* Custom interactive ring shadows for B&W premium styles */
+.bw-shadow {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.bw-shadow-focused {
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.25), 0 4px 16px rgba(0, 0, 0, 0.6);
 }

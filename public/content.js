@@ -1,54 +1,460 @@
-// Sidekick — Content script
-// Injected into every page to perform DOM actions on behalf of the popup.
+// Sidekick — Upgraded Content Script (Advanced Skills & Extractors)
 
-console.log("Sidekick content script loaded");
+console.log("Sidekick Advanced Content Script Loaded");
 
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  // Return the visible text of the page (for summarization)
-  if (msg.type === "GET_PAGE_TEXT") {
-    sendResponse({ text: document.body.innerText.substring(0, 8000) });
-    return;
+// Helper to determine if an element is visible
+function isElementVisible(el) {
+  if (!el) return false;
+  const rect = el.getBoundingClientRect();
+  const style = window.getComputedStyle(el);
+  return (
+    style.display !== 'none' &&
+    style.visibility !== 'hidden' &&
+    style.opacity !== '0' &&
+    rect.width > 0 &&
+    rect.height > 0
+  );
+}
+
+// Sidekick unique element IDs (transient)
+var skIdCounter = 1; // Use var to avoid duplicate declaration
+function getOrAssignSidekickId(el) {
+  let id = el.getAttribute("data-sidekick-id");
+  if (!id) {
+    id = `sk-${skIdCounter++}`;
+    el.setAttribute("data-sidekick-id", id);
+  }
+  return id;
+}
+
+// Strong fuzzy match implementation
+function findBestMatch(elements, targetText) {
+  if (!targetText) return null;
+  const target = targetText.toLowerCase().trim();
+  let bestElement = null;
+  let bestScore = -1;
+
+  for (const el of elements) {
+    if (!isElementVisible(el)) continue;
+
+    const elText = (el.innerText || el.value || "").toLowerCase().trim();
+    const ariaLabel = (el.getAttribute("aria-label") || "").toLowerCase().trim();
+    const placeholder = (el.getAttribute("placeholder") || "").toLowerCase().trim();
+    const title = (el.getAttribute("title") || "").toLowerCase().trim();
+    const id = (el.id || "").toLowerCase().trim();
+    const skId = (el.getAttribute("data-sidekick-id") || "").toLowerCase().trim();
+
+    let score = 0;
+
+    // 1. Exact matches
+    if (elText === target) score = 100;
+    else if (ariaLabel === target) score = 95;
+    else if (placeholder === target) score = 90;
+    else if (title === target) score = 85;
+    else if (id === target) score = 80;
+    else if (skId === target) score = 75;
+    // 2. Includes matches
+    else if (elText.includes(target)) score = 70;
+    else if (ariaLabel.includes(target)) score = 65;
+    else if (placeholder.includes(target)) score = 60;
+    else if (title.includes(target)) score = 55;
+    // 3. Word matches
+    else {
+      const elWords = elText.split(/\s+/);
+      const targetWords = target.split(/\s+/);
+      let overlaps = 0;
+      for (const w of targetWords) {
+        if (w && elWords.includes(w)) overlaps++;
+      }
+      if (overlaps > 0) {
+        score = 10 + (overlaps / elWords.length) * 20;
+      }
+    }
+
+    if (score > bestScore && score > 0) {
+      bestScore = score;
+      bestElement = el;
+    }
   }
 
-  // Scroll the page up or down
-  if (msg.type === "SCROLL") {
-    const amount = msg.direction === "up" ? -500 : 500;
-    window.scrollBy({ top: amount, behavior: "smooth" });
-    sendResponse({ success: true });
-    return;
-  }
+  return bestElement;
+}
 
-  // Find a visible element whose text matches and click it
-  if (msg.type === "CLICK_TEXT") {
-    const target = msg.text.toLowerCase();
-    const clickable = [...document.querySelectorAll("a, button, [role='button'], input[type='submit'], input[type='button']")];
-    const match = clickable.find((el) => {
-      const label = (el.innerText || el.value || el.getAttribute("aria-label") || "").toLowerCase();
-      return label.includes(target) && el.offsetParent !== null; // visible
+// Token Optimized Element Indexing Context (max limits applied)
+function getPageContext() {
+  const getCompactAttributes = (el, type) => {
+    return {
+      id: getOrAssignSidekickId(el),
+      type: type,
+      text: (el.innerText || el.value || el.placeholder || "").trim().substring(0, 50)
+    };
+  };
+
+  // Tiny text context limit of 2000 chars by default
+  const visibleText = document.body.innerText.substring(0, 2000);
+
+  const buttons = Array.from(document.querySelectorAll("button, [role='button'], input[type='button'], input[type='submit']"))
+    .filter(isElementVisible)
+    .slice(0, 30)
+    .map(el => getCompactAttributes(el, "button"));
+
+  const links = Array.from(document.querySelectorAll("a"))
+    .filter(isElementVisible)
+    .slice(0, 30)
+    .map(el => getCompactAttributes(el, "link"));
+
+  const inputs = Array.from(document.querySelectorAll("input:not([type='hidden']), textarea, [contenteditable='true']"))
+    .filter(isElementVisible)
+    .slice(0, 20)
+    .map(el => getCompactAttributes(el, "input"));
+
+  const headings = Array.from(document.querySelectorAll("h1, h2, h3, h4"))
+    .filter(isElementVisible)
+    .slice(0, 15)
+    .map(el => ({ tag: el.tagName.toLowerCase(), text: el.innerText.trim().substring(0, 60) }));
+
+  return {
+    url: window.location.href,
+    title: document.title,
+    visibleText,
+    buttons,
+    links,
+    inputs,
+    headings
+  };
+}
+
+// Perfect simulated clicks
+function simulateClick(el) {
+  el.focus();
+  const mouseClickEvents = ['mousedown', 'click', 'mouseup'];
+  mouseClickEvents.forEach(trigger => {
+    const event = new MouseEvent(trigger, {
+      bubbles: true,
+      cancelable: true,
+      view: window
     });
-    if (match) {
-      match.click();
-      sendResponse({ success: true, clicked: match.innerText || match.value || "" });
-    } else {
-      sendResponse({ success: false, error: "No matching element found" });
+    el.dispatchEvent(event);
+  });
+}
+
+// Advanced timestamp conversion helper
+function parseTimestampToSeconds(str) {
+  if (!str) return null;
+  const clean = str.toLowerCase().trim();
+  
+  // 1. Format: hh:mm:ss or mm:ss
+  const colons = clean.split(":");
+  if (colons.length > 1) {
+    let secs = 0;
+    if (colons.length === 3) {
+      secs += parseInt(colons[0], 10) * 3600;
+      secs += parseInt(colons[1], 10) * 60;
+      secs += parseInt(colons[2], 10);
+    } else if (colons.length === 2) {
+      secs += parseInt(colons[0], 10) * 60;
+      secs += parseInt(colons[1], 10);
     }
-    return;
+    if (!isNaN(secs)) return secs;
   }
 
-  // Type text into the focused input or the first visible input
-  if (msg.type === "TYPE_TEXT") {
-    let input = document.activeElement;
-    if (!input || !["INPUT", "TEXTAREA"].includes(input.tagName)) {
-      input = document.querySelector("input:not([type='hidden']):not([type='submit']):not([type='button']), textarea");
-    }
-    if (input) {
-      input.focus();
-      input.value = msg.text;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      sendResponse({ success: true });
-    } else {
-      sendResponse({ success: false, error: "No input field found" });
-    }
-    return;
+  // 2. Format: "10 minutes", "90 seconds", "10 min 20 sec"
+  let totalSeconds = 0;
+  const hrMatch = clean.match(/(\d+)\s*(?:hour|hr|h)/);
+  const minMatch = clean.match(/(\d+)\s*(?:minute|min|m)/);
+  const secMatch = clean.match(/(\d+)\s*(?:second|sec|s)/);
+
+  if (hrMatch) totalSeconds += parseInt(hrMatch[1], 10) * 3600;
+  if (minMatch) totalSeconds += parseInt(minMatch[1], 10) * 60;
+  if (secMatch) totalSeconds += parseInt(secMatch[1], 10);
+
+  if (totalSeconds > 0) return totalSeconds;
+
+  // 3. Raw digit match
+  const rawDigits = clean.match(/^\d+$/);
+  if (rawDigits) return parseInt(clean, 10);
+
+  return null;
+}
+
+// Seek directly to chapter name matches on YouTube page
+function seekToChapter(chapterName) {
+  const lower = chapterName.toLowerCase().trim();
+  // Query markers list in description or sidebar chapters list
+  const chapters = Array.from(document.querySelectorAll(".ytp-chapter-title, ytd-macro-markers-list-item-renderer, a[href*='t=']"));
+  const match = chapters.find(el => el.innerText.toLowerCase().includes(lower));
+  if (match) {
+    match.click();
+    return true;
   }
+  return false;
+}
+
+// Robust generic e-commerce element parser
+function extractProductCards() {
+  const products = [];
+  
+  // Target lists on Amazon, eBay, Walmart, or generic cards
+  let cards = Array.from(document.querySelectorAll('[data-component-type="s-search-result"], .s-result-item, .s-item, [class*="product-card" i], [class*="product-item" i]'));
+  
+  if (cards.length === 0) {
+    cards = Array.from(document.querySelectorAll('.s-item, .product-layout, .grid-item, [class*="card" i]'));
+  }
+  
+  for (const card of cards) {
+    if (!isElementVisible(card)) continue;
+    
+    // Extract Product Title
+    const titleEl = card.querySelector('h2, h3, [class*="title" i], .s-line-clamp-2, a.a-link-normal span');
+    if (!titleEl) continue;
+    const title = titleEl.innerText.trim();
+    if (!title || title.length < 5) continue;
+    
+    // Extract Price
+    let price = "";
+    const priceEl = card.querySelector('.a-price-whole, .a-price, .price, [class*="price" i], .s-item__price');
+    if (priceEl) {
+      price = priceEl.innerText.trim().replace(/\n/g, ".");
+    } else {
+      const priceMatch = card.innerText.match(/\$\d+(?:\.\d{2})?/);
+      if (priceMatch) price = priceMatch[0];
+    }
+    if (!price) continue; // Skip cards without prices
+    
+    // Extract Rating
+    let rating = "";
+    const ratingEl = card.querySelector('.a-icon-alt, [class*="rating" i], .s-item__stars');
+    if (ratingEl) {
+      rating = ratingEl.innerText.trim();
+    } else {
+      const ratingMatch = card.innerHTML.match(/(\d+(?:\.\d+)?)\s*(?:out of )?5\s*stars/i);
+      if (ratingMatch) rating = `${ratingMatch[1]}/5`;
+    }
+    
+    // Extract Reviews
+    let reviews = "";
+    const reviewsEl = card.querySelector('.a-size-base, [class*="reviews" i], [class*="review-count" i]');
+    if (reviewsEl) {
+      reviews = reviewsEl.innerText.trim();
+    }
+    
+    // Link & Image
+    const linkEl = card.querySelector('a[href*="/dp/"], a[href*="/itm/"], a[class*="link" i], h2 a, a');
+    const href = linkEl ? linkEl.href : "";
+    const imgEl = card.querySelector('img.s-image, img.product-image, img');
+    const imageSrc = imgEl ? imgEl.src : "";
+
+    products.push({
+      title,
+      price,
+      rating,
+      reviews,
+      href,
+      imageSrc
+    });
+  }
+
+  return products.slice(0, 15); // Cap at 15 items for token efficiency
+}
+
+// Convert price strings to sortable floats
+function parsePriceToNumber(priceStr) {
+  if (!priceStr) return Infinity;
+  const clean = priceStr.replace(/[^\d.]/g, "");
+  const parsed = parseFloat(clean);
+  return isNaN(parsed) ? Infinity : parsed;
+}
+
+// Listen for action triggers
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const { type, args } = message;
+
+  try {
+    switch (type) {
+      case "GET_PAGE_CONTEXT": {
+        sendResponse({ success: true, data: getPageContext() });
+        break;
+      }
+
+      case "GET_PAGE_TEXT": {
+        // Cap to 8000 characters for full details requested specifically
+        sendResponse({ success: true, data: document.body.innerText.substring(0, 8000) });
+        break;
+      }
+
+      // -----------------------------------------------------------------------
+      // YouTube advanced tools
+      // -----------------------------------------------------------------------
+      case "YOUTUBE_SEEK_TO_TIMESTAMP": {
+        const video = document.querySelector("video");
+        if (video) {
+          const seconds = parseTimestampToSeconds(args.timestamp);
+          if (seconds !== null) {
+            video.currentTime = seconds;
+            video.play();
+            sendResponse({ success: true, data: `Seeked to ${seconds} seconds` });
+          } else {
+            const chapterFound = seekToChapter(args.timestamp);
+            if (chapterFound) {
+              sendResponse({ success: true, data: `Navigated to chapter: "${args.timestamp}"` });
+            } else {
+              sendResponse({ success: false, error: `Could not parse time or find chapter for: "${args.timestamp}"` });
+            }
+          }
+        } else {
+          sendResponse({ success: false, error: "No video player detected on page" });
+        }
+        break;
+      }
+
+      case "YOUTUBE_GET_CURRENT_TIMESTAMP": {
+        const video = document.querySelector("video");
+        if (video) {
+          const time = Math.floor(video.currentTime);
+          const hrs = Math.floor(time / 3600);
+          const mins = Math.floor((time % 3600) / 60);
+          const secs = time % 60;
+          const formatted = hrs > 0 
+            ? `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+            : `${mins}:${secs.toString().padStart(2, '0')}`;
+          sendResponse({ success: true, data: formatted });
+        } else {
+          sendResponse({ success: false, error: "No active video found" });
+        }
+        break;
+      }
+
+      case "YOUTUBE_GET_VIDEO_TITLE": {
+        const titleEl = document.querySelector("h1.ytd-watch-metadata, ytd-video-primary-info-renderer h1");
+        const title = titleEl ? titleEl.innerText.trim() : document.title;
+        sendResponse({ success: true, data: title });
+        break;
+      }
+
+      case "YOUTUBE_CHECK_LOGIN": {
+        // Quick heuristics to see if visitor is guest
+        const signInBtn = document.querySelector('a[href*="ServiceLogin"], ytd-button-renderer[class*="sign-in"]');
+        const isLoggedIn = !signInBtn;
+        sendResponse({ success: true, data: isLoggedIn });
+        break;
+      }
+
+      // -----------------------------------------------------------------------
+      // Commerce Advanced Extractor tools
+      // -----------------------------------------------------------------------
+      case "EXTRACT_PRODUCT_CARDS": {
+        const list = extractProductCards();
+        sendResponse({ success: true, data: list });
+        break;
+      }
+
+      case "EXTRACT_PRICES": {
+        const list = extractProductCards().map(item => ({ title: item.title, price: item.price }));
+        sendResponse({ success: true, data: list });
+        break;
+      }
+
+      case "SORT_ITEMS_BY_PRICE": {
+        const sorted = extractProductCards().sort((a, b) => {
+          return parsePriceToNumber(a.price) - parsePriceToNumber(b.price);
+        });
+        sendResponse({ success: true, data: sorted });
+        break;
+      }
+
+      case "EXTRACT_REVIEWS": {
+        const list = extractProductCards().map(item => ({ title: item.title, reviews: item.reviews }));
+        sendResponse({ success: true, data: list });
+        break;
+      }
+
+      case "EXTRACT_RATINGS": {
+        const list = extractProductCards().map(item => ({ title: item.title, rating: item.rating }));
+        sendResponse({ success: true, data: list });
+        break;
+      }
+
+      // -----------------------------------------------------------------------
+      // Legacy element selectors with tiny-caps matching support
+      // -----------------------------------------------------------------------
+      case "CLICK_TEXT": {
+        const target = args.target;
+        const allElements = Array.from(document.querySelectorAll("a, button, [role='button'], input, p, span, div, h1, h2, h3, h4"));
+        const el = findBestMatch(allElements, target);
+        if (el) {
+          simulateClick(el);
+          sendResponse({ success: true, data: `Clicked: ${target}` });
+        } else {
+          sendResponse({ success: false, error: `Could not click target: "${target}"` });
+        }
+        break;
+      }
+
+      case "TYPE_TEXT": {
+        const inputs = Array.from(document.querySelectorAll("input:not([type='hidden']), textarea, [contenteditable='true']"));
+        let el = null;
+        if (document.activeElement && ["INPUT", "TEXTAREA"].includes(document.activeElement.tagName) && isElementVisible(document.activeElement)) {
+          el = document.activeElement;
+        } else if (args.target) {
+          el = findBestMatch(inputs, args.target);
+        }
+        if (!el && inputs.length > 0) {
+          el = inputs.find(isElementVisible);
+        }
+        if (el) {
+          el.focus();
+          el.value = "";
+          el.value = args.text;
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          sendResponse({ success: true, data: `Typed text in: ${getOrAssignSidekickId(el)}` });
+        } else {
+          sendResponse({ success: false, error: "No text input found" });
+        }
+        break;
+      }
+
+      // Delegate legacy tools to base cases
+      case "SCROLL_DOWN": {
+        window.scrollBy({ top: window.innerHeight * 0.75, behavior: "smooth" });
+        sendResponse({ success: true, data: "Scrolled" });
+        break;
+      }
+      case "SCROLL_UP": {
+        window.scrollBy({ top: -window.innerHeight * 0.75, behavior: "smooth" });
+        sendResponse({ success: true, data: "Scrolled" });
+        break;
+      }
+      case "SCROLL_TO_TOP": {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+        sendResponse({ success: true, data: "Scrolled to top" });
+        break;
+      }
+      case "SCROLL_TO_BOTTOM": {
+        window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+        sendResponse({ success: true, data: "Scrolled to bottom" });
+        break;
+      }
+      case "PRESS_ENTER": {
+        const el = document.activeElement || document.body;
+        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+        el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+        sendResponse({ success: true });
+        break;
+      }
+      case "COPY_SELECTED_TEXT": {
+        const text = window.getSelection().toString();
+        sendResponse({ success: true, data: text });
+        break;
+      }
+
+      default:
+        // Handle remaining tools as generic click or message routes
+        sendResponse({ success: false, error: `DOM Action type not supported: ${type}` });
+    }
+  } catch (err) {
+    sendResponse({ success: false, error: `Content error: ${err.message}` });
+  }
+
+  return true;
 });
