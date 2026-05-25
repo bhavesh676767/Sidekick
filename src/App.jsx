@@ -220,7 +220,7 @@ export default function App() {
   };
 
   return (
-    <div className="bg-white">
+    <div className="w-[380px] h-[600px] overflow-hidden bg-white text-black">
       {renderScreen()}
     </div>
   );

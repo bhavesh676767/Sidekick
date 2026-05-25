@@ -1,10 +1,10 @@
 import React from 'react';
-import { Button } from './Button';
-import { MascotPlaceholder, Doodle } from './Illustrations';
+import { Button } from '../components/Button';
+import { MascotPlaceholder, Doodle } from '../components/Illustrations';
 
 export const OnboardingScreen = ({ onGetStarted }) => {
   return (
-    <div className="min-h-screen bg-white flex flex-col items-center justify-center p-6 text-center">
+    <div className="h-full bg-white flex flex-col items-center justify-center p-6 text-center">
       {/* Decorative elements */}
       <div className="absolute top-8 left-8 opacity-30">
         <Doodle type="dots" />

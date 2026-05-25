@@ -19,7 +19,7 @@ export const TaskExecutionScreen = ({
   result = '',
 }) => {
   return (
-    <div className="w-96 bg-white min-h-screen flex flex-col">
+    <div className="w-full h-full bg-white flex flex-col">
       {/* Header */}
       <div className="px-6 pt-4 pb-3 border-b border-gray-200 flex items-center justify-between">
         <div className="flex items-center gap-3">
