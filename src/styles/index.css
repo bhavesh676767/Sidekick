@@ -15,7 +15,6 @@ html, body {
   width: 360px;
   height: 520px;
 }
-
 @layer base {
   body {
     @apply bg-white text-black;
