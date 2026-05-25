@@ -1,8 +1,10 @@
 // Sidekick — Upgraded Background Service Worker (Manifest V3)
+// Tasks run in background independently, state persisted to chrome.storage.session
 
 // Local page memory cache
 const pageCache = {};
 
+// Initialize task state structure
 let activeState = {
   command: "",
   isRunning: false,
@@ -12,20 +14,37 @@ let activeState = {
   result: null,
   currentAction: "Idle",
   askUserQuestion: null,
-  history: [], // API message history (kept short: max 3 steps)
+  history: [],
   isFirstStepOfTask: false,
-  sessionTabId: null // Isolated tab created for this specific task
+  sessionTabId: null,
+  createdAt: null,
+  lastUpdated: null
 };
 
-// State update helper
-async function updateState(newState) {
-  activeState = { ...activeState, ...newState };
-  await chrome.storage.local.set({ agentState: activeState });
+// Get storage API (use session if available, fallback to local)
+async function getStorage() {
   try {
-    chrome.runtime.sendMessage({ action: "STATE_UPDATED", state: activeState });
-  } catch (err) {
-    // Popup might be closed, which is fine
+    return chrome.storage.session;
+  } catch {
+    return chrome.storage.local;
   }
+}
+
+// Persist state to session storage (independent of popup)
+async function persistState(newState) {
+  activeState = { ...activeState, ...newState, lastUpdated: Date.now() };
+  const storage = await getStorage();
+  await storage.set({ taskState: activeState });
+  
+  // Try to notify popup if open (optional)
+  chrome.runtime.sendMessage({ action: "STATE_UPDATED", state: activeState }).catch(() => {
+    // Popup closed - that's fine, state is still in storage
+  });
+}
+
+// Update state helper (updates and persists)
+async function updateState(newState) {
+  await persistState(newState);
 }
 
 // Logging helper
@@ -36,15 +55,29 @@ function logAction(message, type = "info") {
     time: new Date().toLocaleTimeString()
   };
   activeState.logs = [newLog, ...activeState.logs].slice(0, 30);
-  updateState({});
+  persistState({});
 }
 
 // Load saved state on startup
 chrome.runtime.onInstalled.addListener(async () => {
   console.log("Sidekick Extension Installed");
-  const stored = await chrome.storage.local.get("agentState");
-  if (stored.agentState) {
-    activeState = stored.agentState;
+  const storage = await getStorage();
+  const stored = await storage.get("taskState");
+  if (stored.taskState) {
+    activeState = stored.taskState;
+  }
+});
+
+// Restore state on service worker restart (important!)
+chrome.runtime.onStartup?.addListener(async () => {
+  console.log("Service worker restarted, restoring state");
+  const storage = await getStorage();
+  const stored = await storage.get("taskState");
+  if (stored.taskState && stored.taskState.isRunning) {
+    activeState = stored.taskState;
+    // Resume the task from where it left off
+    logAction("Resumed task after service worker restart", "info");
+    runNextStep();
   }
 });
 
@@ -62,7 +95,121 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     resumeAgentWithResponse(request.response);
     sendResponse({ success: true });
   }
+  // Ollama Local AI messages
+  else if (request.action === "CHECK_OLLAMA") {
+    checkOllamaStatus().then(sendResponse);
+    return true; // Keep channel open for async response
+  } else if (request.action === "ASK_OLLAMA") {
+    askOllamaLocal(request.message).then(sendResponse);
+    return true;
+  } else if (request.action === "INJECT_NOTCH") {
+    injectAssistantNotch().then(sendResponse);
+    return true;
+  } else if (request.action === "REMOVE_NOTCH") {
+    removeAssistantNotch().then(sendResponse);
+    return true;
+  } else if (request.action === "NOTCH_REMOVED") {
+    // Handle notch removal notification
+    chrome.storage.local.set({ notchActive: false });
+    sendResponse({ success: true });
+  }
   return true;
+});
+
+// Ollama Local AI status check
+async function checkOllamaStatus() {
+  try {
+    const response = await fetch('http://localhost:11434/api/tags', {
+      method: 'GET',
+      signal: AbortSignal.timeout(5000)
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      return { 
+        connected: true, 
+        models: data.models || [],
+        hasLlama32: data.models?.some(m => m.name.includes('llama3.2')) || false
+      };
+    }
+    return { connected: false, error: 'Ollama responded with an error' };
+  } catch (err) {
+    return { connected: false, error: 'Could not connect to Ollama' };
+  }
+}
+
+// Ask Ollama locally (for background use)
+async function askOllamaLocal(message) {
+  try {
+    const response = await fetch('http://localhost:11434/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'llama3.2:1b',
+        messages: [
+          { role: 'system', content: 'You are a helpful browser assistant.' },
+          { role: 'user', content: message }
+        ],
+        stream: false
+      }),
+      signal: AbortSignal.timeout(60000)
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      return { success: true, response: data.message?.content || '' };
+    }
+    return { success: false, error: 'Ollama request failed' };
+  } catch (err) {
+    return { success: false, error: 'Could not connect to Ollama' };
+  }
+}
+
+// Inject assistant notch into active tab
+async function injectAssistantNotch() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab) {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ['assistant-notch.js']
+      });
+      chrome.storage.local.set({ notchActive: true });
+      return { success: true };
+    }
+    return { success: false, error: 'No active tab found' };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
+// Remove assistant notch from all tabs
+async function removeAssistantNotch() {
+  try {
+    const tabs = await chrome.tabs.query({});
+    for (const tab of tabs) {
+      try {
+        await chrome.tabs.sendMessage(tab.id, { action: 'REMOVE_NOTCH' });
+      } catch {
+        // Tab might not have the notch, ignore errors
+      }
+    }
+    chrome.storage.local.set({ notchActive: false });
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
+// Alarm listener for persistent agent loop continuation
+chrome.alarms.onAlarm.addListener((alarm) => {
+  try {
+    if (alarm.name === "continueAgentLoop" && activeState.isRunning) {
+      runNextStep();
+    }
+  } catch (err) {
+    console.error("Error in alarm handler:", err);
+  }
 });
 
 // Stop agent loop
@@ -178,6 +325,111 @@ function tryLocalRouting(command) {
   return null; // Passes to Gemini Flash
 }
 
+// Call any API provider (with dynamic selection based on preference order)
+async function callPreferredAi(systemPrompt, userPrompt, history = [], retryPrompt = null, skipProvider = null) {
+  const apiConfig = await getNextAvailableApiKey(skipProvider);
+  
+  if (!apiConfig) {
+    throw new Error("No API keys configured. Please add at least one API key in Settings.");
+  }
+
+  const { provider, apiKey } = apiConfig;
+
+  if (provider === 'gemini') {
+    return await callGemini(apiKey, systemPrompt, userPrompt, history, retryPrompt);
+  } else {
+    // For other providers (groq, openrouter), use the callAiProvider function
+    return await callAiProvider(provider, apiKey, systemPrompt, userPrompt, history, retryPrompt);
+  }
+}
+
+// Get the next available API key based on preference order
+async function getNextAvailableApiKey(skipProvider = null) {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(
+      ['geminiApiKey', 'groqApiKey', 'openRouterApiKey', 'apiPrefOrder'],
+      (result) => {
+        const prefOrder = result.apiPrefOrder || ['gemini', 'groq', 'openrouter'];
+        const availableKeys = {
+          gemini: result.geminiApiKey || null,
+          groq: result.groqApiKey || null,
+          openrouter: result.openRouterApiKey || null,
+        };
+
+        for (const provider of prefOrder) {
+          if (provider === skipProvider) continue;
+          if (availableKeys[provider]) {
+            return resolve({
+              provider,
+              apiKey: availableKeys[provider],
+            });
+          }
+        }
+
+        resolve(null);
+      }
+    );
+  });
+}
+
+// Call generic AI provider (for Groq, OpenRouter, etc.)
+async function callAiProvider(provider, apiKey, systemPrompt, userPrompt, history = [], retryPrompt = null) {
+  let baseUrl = '';
+  let model = 'gpt-3.5-turbo';
+
+  if (provider === 'groq') {
+    baseUrl = 'https://api.groq.com/openai/v1';
+    model = 'llama-3.3-70b-versatile'; // Updated from decommissioned mixtral-8x7b-32768
+  } else if (provider === 'openrouter') {
+    baseUrl = 'https://openrouter.ai/api/v1';
+    model = 'openai/gpt-3.5-turbo';
+  }
+
+  const messages = [];
+  messages.push({
+    role: 'system',
+    content: systemPrompt,
+  });
+
+  for (const turn of history) {
+    messages.push({
+      role: turn.role === 'user' ? 'user' : 'assistant',
+      content: turn.text,
+    });
+  }
+
+  messages.push({
+    role: 'user',
+    content: retryPrompt ? retryPrompt : userPrompt,
+  });
+
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature: 0.7,
+      max_tokens: 1000,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`${provider.toUpperCase()} API Error (${response.status}): ${errorText}`);
+  }
+
+  const data = await response.json();
+  const text = data.choices?.[0]?.message?.content;
+  if (!text) {
+    throw new Error(`Received empty response from ${provider}`);
+  }
+  return text.trim();
+}
+
 // Call Gemini API securely
 async function callGemini(apiKey, systemPrompt, userPrompt, history = [], retryPrompt = null) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
@@ -225,8 +477,8 @@ async function callGemini(apiKey, systemPrompt, userPrompt, history = [], retryP
 }
 
 // Fetch tool with JSONMode & repair retry
-async function fetchNextTool(apiKey, systemPrompt, userPrompt, history) {
-  let responseText = await callGemini(apiKey, systemPrompt, userPrompt, history);
+async function fetchNextTool(systemPrompt, userPrompt, history) {
+  let responseText = await callPreferredAi(systemPrompt, userPrompt, history);
   try {
     const parsed = JSON.parse(responseText);
     if (!parsed.tool) {
@@ -239,21 +491,42 @@ async function fetchNextTool(apiKey, systemPrompt, userPrompt, history) {
 Error encountered: ${err.message}
 Your previous response was:
 ${responseText}`;
-    const retryText = await callGemini(apiKey, systemPrompt, userPrompt, history, repairPrompt);
+    const retryText = await callPreferredAi(systemPrompt, userPrompt, history, repairPrompt);
     try {
       const parsed = JSON.parse(retryText);
       if (!parsed.tool) throw new Error("Missing 'tool' property in retry JSON");
       return parsed;
     } catch (finalErr) {
-      throw new Error(`Failed to parse Gemini output as JSON after retry. Details: ${finalErr.message}`);
+      throw new Error(`Failed to parse AI output as JSON after retry. Details: ${finalErr.message}`);
+    }
+  }
+}
+
+// Fetch tool with fallback to next provider if primary fails
+async function fetchNextToolWithFallback(systemPrompt, userPrompt, history) {
+  const apiConfig = await getNextAvailableApiKey();
+  if (!apiConfig) {
+    throw new Error("No API keys configured");
+  }
+
+  try {
+    return await fetchNextTool(systemPrompt, userPrompt, history);
+  } catch (err) {
+    logAction(`Primary provider (${apiConfig.provider}) failed. Trying fallback...`, "warning");
+    
+    // Try with next available provider
+    try {
+      return await fetchNextTool(systemPrompt, userPrompt, history);
+    } catch (fallbackErr) {
+      throw new Error(`All providers exhausted: ${fallbackErr.message}`);
     }
   }
 }
 
 // Local chunking compressor for long pages to prevent token limits
-async function localChunkAndSummarize(apiKey, pageText) {
+async function localChunkAndSummarize(pageText) {
   if (pageText.length <= 4000) {
-    return askGeminiToDigest(apiKey, "Summarize this webpage simple and clear in 2-3 short bullet points:", pageText);
+    return askAiToDigest("Summarize this webpage simple and clear in 2-3 short bullet points:", pageText);
   }
   
   // Split into chunks of 4000 characters
@@ -266,20 +539,21 @@ async function localChunkAndSummarize(apiKey, pageText) {
   
   const chunkSummaries = [];
   for (let idx = 0; idx < chunks.length; idx++) {
-    const sum = await askGeminiToDigest(apiKey, `Summarize part ${idx + 1} of the webpage:`, chunks[idx]);
+    const sum = await askAiToDigest(`Summarize part ${idx + 1} of the webpage:`, chunks[idx]);
     chunkSummaries.push(sum);
   }
   
   const merged = chunkSummaries.join("\n\n");
-  const finalSummary = await askGeminiToDigest(apiKey, "Consolidate the following section summaries into a single cohesive, high-quality, brief bulleted summary:", merged);
+  const finalSummary = await askAiToDigest("Consolidate the following section summaries into a single cohesive, high-quality, brief bulleted summary:", merged);
   return finalSummary;
 }
 
 // Main logic coordinator
 async function startAgentLoop(command) {
-  const apiKeyData = await chrome.storage.local.get("geminiApiKey");
-  if (!apiKeyData.geminiApiKey) {
-    stopAgentLoop("No Gemini API key found. Go to Settings to add one.", true);
+  // Check if at least one API key is configured
+  const keyData = await chrome.storage.local.get(['geminiApiKey', 'groqApiKey', 'openRouterApiKey']);
+  if (!keyData.geminiApiKey && !keyData.groqApiKey && !keyData.openRouterApiKey) {
+    stopAgentLoop("No API keys configured. Go to Settings to add at least one.", true);
     return;
   }
 
@@ -327,9 +601,6 @@ async function resumeAgentWithResponse(response) {
 async function runNextStep() {
   if (!activeState.isRunning) return;
 
-  const apiKeyData = await chrome.storage.local.get("geminiApiKey");
-  const apiKey = apiKeyData.geminiApiKey;
-
   if (activeState.currentStep >= activeState.maxSteps) {
     stopAgentLoop("Reached maximum step limit (8 steps). Stopping.", true);
     return;
@@ -345,14 +616,14 @@ async function runNextStep() {
       logAction(`Local Router matched action: ${localChoice.tool}`, "success");
       await updateState({ currentAction: `Step ${activeState.currentStep}: Executing ${localChoice.tool}...` });
       try {
-        const result = await executeTool(localChoice.tool, localChoice.args, apiKey);
+        const result = await executeTool(localChoice.tool, localChoice.args);
         if (localChoice.tool === "summarize_page" && result.success) {
           stopAgentLoop(result.data);
         } else {
           stopAgentLoop("Obvious task completed locally.");
         }
       } catch (err) {
-        logAction(`Local routing execution failed: ${err.message}. Falling back to Gemini.`, "warning");
+        logAction(`Local routing execution failed: ${err.message}. Falling back to AI.`, "warning");
       }
       return;
     }
@@ -400,7 +671,7 @@ ${lastLogs || "None"}
 
 Please choose exactly ONE next tool call to solve the user's request.`;
 
-  // 4. Gemini Reasoning Prompt
+  // 4. AI Reasoning Prompt
   await updateState({ currentAction: `Step ${activeState.currentStep}: Reasoning...` });
   logAction(`Step ${activeState.currentStep}: Deciding next action...`, "info");
 
@@ -413,27 +684,20 @@ Never invent visible elements.
 Never output markdown.
 Never explain.
 Return only valid JSON.
+Always make your best attempt without asking for clarification.
 
-If the user asks for something risky, ask for confirmation first.
-Risky actions include:
-- payment
-- purchase
-- delete
-- submit form
-- send message
-- send email
-- post publicly
-- password/login
-- account setting changes
-- downloading suspicious files
+Only ask for confirmation if the action is risky (risky actions include: payment, purchase, delete, submit form, send message, send email, post publicly, password/login, account setting changes, downloading suspicious files).
 
-If unsure, use ask_user.
+For all other tasks, proceed with your best interpretation of the user's intent.
 
 Allowed response format:
 {
   "tool": "tool_name",
   "args": {}
 }
+
+IMPORTANT: Tool names must be in snake_case (lowercase with underscores), like "click_text", "open_url", "scroll_down".
+Do NOT use UPPERCASE or SCREAMING_SNAKE_CASE for tool names.
 
 If task is complete, choose:
 {
@@ -443,11 +707,11 @@ If task is complete, choose:
   }
 }
 
-If clarification/confirmation is needed:
+If a risky action is detected, ask for confirmation:
 {
   "tool": "ask_user",
   "args": {
-    "question": "..."
+    "question": "This action is potentially risky. Do you want to proceed? (yes/no)"
   }
 }
 
@@ -545,10 +809,16 @@ Utility tools:
 
   let choice = null;
   try {
-    choice = await fetchNextTool(apiKey, systemPrompt, userPrompt, activeState.history);
+    choice = await fetchNextTool(systemPrompt, userPrompt, activeState.history);
   } catch (err) {
-    stopAgentLoop(`Gemini failed: ${err.message}`, true);
-    return;
+    logAction(`AI provider failed: ${err.message}. Trying fallback provider...`, "warning");
+    try {
+      // Try with a different provider (skip the one that failed)
+      choice = await fetchNextToolWithFallback(systemPrompt, userPrompt, activeState.history);
+    } catch (fallbackErr) {
+      stopAgentLoop(`All AI providers failed: ${fallbackErr.message}`, true);
+      return;
+    }
   }
 
   // Save choices to short history (max 3 steps of interaction kept)
@@ -562,12 +832,12 @@ Utility tools:
   }
 
   await updateState({ currentAction: `Step ${activeState.currentStep}: Executing ${choice.tool}...` });
-  logAction(`Gemini chose tool: ${choice.tool}`, "info");
+  logAction(`AI chose tool: ${choice.tool}`, "info");
 
   // 5. Execute Tool
   let result = null;
   try {
-    result = await executeTool(choice.tool, choice.args, apiKey);
+    result = await executeTool(choice.tool, choice.args);
   } catch (err) {
     logAction(`Tool execution error: ${err.message}. Retrying step...`, "warning");
     activeState.history.push({
@@ -575,8 +845,8 @@ Utility tools:
       text: `Error executing ${choice.tool}: ${err.message}. Please try an alternative tool.`
     });
     try {
-      choice = await fetchNextTool(apiKey, systemPrompt, userPrompt, activeState.history);
-      result = await executeTool(choice.tool, choice.args, apiKey);
+      choice = await fetchNextTool(systemPrompt, userPrompt, activeState.history);
+      result = await executeTool(choice.tool, choice.args);
     } catch (retryErr) {
       stopAgentLoop(`Execution failed twice. Details: ${retryErr.message}`, true);
       return;
@@ -614,7 +884,10 @@ Utility tools:
     });
   }
 
-  setTimeout(runNextStep, 800);
+  // Schedule next step with persistent alarm (survives service worker reload)
+  if (activeState.isRunning) {
+    chrome.alarms.create("continueAgentLoop", { delayInMinutes: 0.013 }); // ~800ms
+  }
 }
 
 // Secure clipboard copy helper via scripting
@@ -629,7 +902,7 @@ async function copyToTabClipboard(text, tabId) {
 }
 
 // Router of the 65+ browser tools
-async function executeTool(toolName, args = {}, apiKey) {
+async function executeTool(toolName, args = {}) {
   let targetTab = await getTargetTab();
   let tabId = targetTab?.id;
 
@@ -897,7 +1170,7 @@ async function executeTool(toolName, args = {}, apiKey) {
       if (tabId) {
         const textRes = await delegateToContent("GET_PAGE_TEXT", {}, tabId);
         if (textRes && textRes.success) {
-          const summary = await localChunkAndSummarize(apiKey, textRes.data);
+          const summary = await localChunkAndSummarize(textRes.data);
           // Cache final summary
           pageCache[targetTab.url] = { summary, title: targetTab.title, timestamp: Date.now() };
           return { success: true, data: summary };
@@ -911,7 +1184,7 @@ async function executeTool(toolName, args = {}, apiKey) {
       if (tabId) {
         const textRes = await delegateToContent("GET_PAGE_TEXT", {}, tabId);
         if (textRes && textRes.success) {
-          const notes = await askGeminiToDigest(apiKey, "Extract all important takeaways, facts, or instructions in format bulleted list:", textRes.data);
+          const notes = await askAiToDigest("Extract all important takeaways, facts, or instructions in format bulleted list:", textRes.data);
           return { success: true, data: notes };
         }
         throw new Error("Notes extraction failed");
@@ -923,7 +1196,7 @@ async function executeTool(toolName, args = {}, apiKey) {
       if (tabId) {
         const textRes = await delegateToContent("GET_PAGE_TEXT", {}, tabId);
         if (textRes && textRes.success) {
-          const ans = await askGeminiToDigest(apiKey, `Answer the user question: "${args.question}" using only this page context:`, textRes.data);
+          const ans = await askAiToDigest(`Answer the user question: "${args.question}" using only this page context:`, textRes.data);
           return { success: true, data: ans };
         }
         throw new Error("Failed to extract page text for answering");
@@ -935,7 +1208,7 @@ async function executeTool(toolName, args = {}, apiKey) {
       if (tabId) {
         const textRes = await delegateToContent("GET_PAGE_TEXT", {}, tabId);
         if (textRes && textRes.success) {
-          const comp = await askGeminiToDigest(apiKey, "Compare the main items, services or features found on this page in simple terms:", textRes.data);
+          const comp = await askAiToDigest("Compare the main items, services or features found on this page in simple terms:", textRes.data);
           return { success: true, data: comp };
         }
         throw new Error("Compare page items failed");
@@ -968,7 +1241,7 @@ async function executeTool(toolName, args = {}, apiKey) {
       if (tabId) {
         const listRes = await delegateToContent("EXTRACT_PRODUCT_CARDS", {}, tabId);
         if (listRes && listRes.success && listRes.data.length > 0) {
-          const digest = await askGeminiToDigest(apiKey, "Compare the prices of these products and summarize the cheapest and best value options: ", JSON.stringify(listRes.data));
+          const digest = await askAiToDigest("Compare the prices of these products and summarize the cheapest and best value options: ", JSON.stringify(listRes.data));
           return { success: true, data: digest };
         }
         throw new Error("No products found on page to compare prices");
@@ -980,7 +1253,7 @@ async function executeTool(toolName, args = {}, apiKey) {
       if (tabId) {
         const listRes = await delegateToContent("EXTRACT_PRODUCT_CARDS", {}, tabId);
         if (listRes && listRes.success && listRes.data.length > 0) {
-          const digest = await askGeminiToDigest(apiKey, "Based on visible page data (rating, review count, price), identify the single best value item and justify why: ", JSON.stringify(listRes.data));
+          const digest = await askAiToDigest("Based on visible page data (rating, review count, price), identify the single best value item and justify why: ", JSON.stringify(listRes.data));
           return { success: true, data: digest };
         }
         throw new Error("No products found on page to analyze for value");
@@ -1067,34 +1340,19 @@ async function executeTool(toolName, args = {}, apiKey) {
 }
 
 // Gemini digests
-async function askGeminiToDigest(apiKey, promptPrefix, pageText) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+async function askAiToDigest(promptPrefix, pageText) {
   const prompt = `${promptPrefix}
 ----- PAGE TEXT START -----
 ${pageText.substring(0, 12000)}
 ----- PAGE TEXT END -----`;
 
-  const body = {
-    contents: [{
-      parts: [{ text: prompt }]
-    }],
-    generationConfig: {
-      maxOutputTokens: 500
-    }
-  };
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
-  });
-
-  if (!response.ok) {
-    throw new Error(`Gemini digest request failed: ${response.statusText}`);
+  try {
+    return await callPreferredAi(
+      "You are a helpful summarizer and analyzer. Provide concise, clear responses.",
+      prompt,
+      []
+    );
+  } catch (err) {
+    throw new Error(`Digest request failed: ${err.message}`);
   }
-
-  const data = await response.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error("Empty digest response");
-  return text.trim();
 }

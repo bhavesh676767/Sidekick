@@ -15,8 +15,16 @@ import {
   Sparkles,
   RefreshCw,
   ClipboardCheck,
-  Info
+  Info,
+  Cpu
 } from "lucide-react";
+import Onboarding from "./components/Onboarding";
+import { 
+  loadSetupState, 
+  isSetupComplete, 
+  isLocalAIEnabled,
+  setLocalAIEnabled 
+} from "./utils/ollama";
 
 // ---------------------------------------------------------------------------
 // Preloader Splash Component (Always displayed on startup / initialization)
@@ -48,10 +56,30 @@ export default function App() {
   const [initLoading, setInitLoading] = useState(true);
   const [preloaderMessage, setPreloaderMessage] = useState("Securing browser pipeline...");
 
-  // API Key & Settings
-  const [apiKey, setApiKey] = useState("");
-  const [isKeySaved, setIsKeySaved] = useState(false);
+  // Onboarding state
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [ollamaSetupDone, setOllamaSetupDone] = useState(false);
+  const [localAIEnabled, setLocalAIEnabledState] = useState(false);
+  const [onboardingChecked, setOnboardingChecked] = useState(false);
+
+  // --- Per-provider API key state ---
+  const [geminiKey, setGeminiKey] = useState("");
+  const [groqKey, setGroqKey] = useState("");
+  const [openRouterKey, setOpenRouterKey] = useState("");
+
+  // Saved flags (true if a key is stored in chrome.storage)
+  const [geminiSaved, setGeminiSaved] = useState(false);
+  const [groqSaved, setGroqSaved] = useState(false);
+  const [openRouterSaved, setOpenRouterSaved] = useState(false);
+
+  // Preference order: array of provider ids, index 0 = 1st preference
+  // e.g. ["gemini", "groq", "openrouter"]
+  const [prefOrder, setPrefOrder] = useState(["gemini", "groq", "openrouter"]);
+
   const [showSettings, setShowSettings] = useState(false);
+
+  // Any key saved? Used to unlock the main UI
+  const anyKeySaved = geminiSaved || groqSaved || openRouterSaved;
 
   // Command & Input
   const [inputCommand, setInputCommand] = useState("");
@@ -77,28 +105,85 @@ export default function App() {
   useEffect(() => {
     async function loadData() {
       setPreloaderMessage("Checking API credentials...");
-      // 1. Fetch saved API Key
-      const keyData = await chrome.storage.local.get("geminiApiKey");
-      if (keyData.geminiApiKey) {
-        setIsKeySaved(true);
-        setApiKey(keyData.geminiApiKey);
+      const stored = await chrome.storage.local.get([
+        "geminiApiKey", "groqApiKey", "openRouterApiKey", "apiPrefOrder"
+      ]);
+      if (stored.geminiApiKey)    { setGeminiKey(stored.geminiApiKey);       setGeminiSaved(true); }
+      if (stored.groqApiKey)      { setGroqKey(stored.groqApiKey);           setGroqSaved(true); }
+      if (stored.openRouterApiKey){ setOpenRouterKey(stored.openRouterApiKey); setOpenRouterSaved(true); }
+      if (stored.apiPrefOrder)    setPrefOrder(stored.apiPrefOrder);
+
+      // Check onboarding state
+      setPreloaderMessage("Checking setup status...");
+      const setupComplete = await isSetupComplete();
+      const localEnabled = await isLocalAIEnabled();
+      setOllamaSetupDone(setupComplete);
+      setLocalAIEnabledState(localEnabled);
+      
+      // Show onboarding if not completed
+      if (!setupComplete) {
+        setShowOnboarding(true);
       }
 
       setPreloaderMessage("Restoring active sessions...");
-      // 2. Fetch current running agent state from background.js
-      chrome.runtime.sendMessage({ action: "GET_STATE" }, (response) => {
-        if (response) {
-          setAgentState(response);
-        }
-        // Artificial delay for smooth aesthetic wow factor transition
-        setTimeout(() => {
-          setInitLoading(false);
-        }, 1200);
-      });
+      
+      // Try to get state from background first, fallback to storage
+      try {
+        chrome.runtime.sendMessage({ action: "GET_STATE" }, (response) => {
+          if (response && response.command) {
+            setAgentState(response);
+          } else {
+            // Fallback: load from chrome.storage.session directly
+            chrome.storage.session.get("taskState", (stored) => {
+              if (stored.taskState && stored.taskState.command) {
+                setAgentState(stored.taskState);
+              }
+            });
+          }
+          setOnboardingChecked(true);
+          setTimeout(() => setInitLoading(false), 1200);
+        });
+      } catch (err) {
+        // Background not available, try storage directly
+        chrome.storage.session.get("taskState", (stored) => {
+          if (stored.taskState && stored.taskState.command) {
+            setAgentState(stored.taskState);
+          }
+          setOnboardingChecked(true);
+          setTimeout(() => setInitLoading(false), 1200);
+        });
+      }
     }
-
     loadData();
   }, []);
+
+  // Handle onboarding completion
+  const handleOnboardingComplete = async () => {
+    setShowOnboarding(false);
+    setOllamaSetupDone(true);
+    setLocalAIEnabledState(true);
+    
+    // Inject the floating notch
+    chrome.runtime.sendMessage({ action: "INJECT_NOTCH" });
+  };
+
+  // Handle onboarding skip
+  const handleOnboardingSkip = () => {
+    setShowOnboarding(false);
+  };
+
+  // Toggle local AI
+  const toggleLocalAI = async () => {
+    const newState = !localAIEnabled;
+    await setLocalAIEnabled(newState);
+    setLocalAIEnabledState(newState);
+    
+    if (newState) {
+      chrome.runtime.sendMessage({ action: "INJECT_NOTCH" });
+    } else {
+      chrome.runtime.sendMessage({ action: "REMOVE_NOTCH" });
+    }
+  };
 
   // Listen for realtime agent state broadcasts from background.js
   useEffect(() => {
@@ -120,20 +205,44 @@ export default function App() {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [agentState.logs]);
 
-  // Save API Key
-  const handleSaveApiKey = async () => {
-    const trimmed = apiKey.trim();
-    if (!trimmed) return;
-    await chrome.storage.local.set({ geminiApiKey: trimmed });
-    setIsKeySaved(true);
-    setShowSettings(false);
+  // --- Per-provider save / delete handlers ---
+  const saveKey = async (provider) => {
+    if (provider === "gemini" && geminiKey.trim()) {
+      await chrome.storage.local.set({ geminiApiKey: geminiKey.trim() });
+      setGeminiSaved(true);
+    } else if (provider === "groq" && groqKey.trim()) {
+      await chrome.storage.local.set({ groqApiKey: groqKey.trim() });
+      setGroqSaved(true);
+    } else if (provider === "openrouter" && openRouterKey.trim()) {
+      await chrome.storage.local.set({ openRouterApiKey: openRouterKey.trim() });
+      setOpenRouterSaved(true);
+    }
   };
 
-  // Reset API Key
-  const handleResetApiKey = async () => {
-    await chrome.storage.local.remove("geminiApiKey");
-    setApiKey("");
-    setIsKeySaved(false);
+  const deleteKey = async (provider) => {
+    if (provider === "gemini") {
+      await chrome.storage.local.remove("geminiApiKey");
+      setGeminiKey(""); setGeminiSaved(false);
+    } else if (provider === "groq") {
+      await chrome.storage.local.remove("groqApiKey");
+      setGroqKey(""); setGroqSaved(false);
+    } else if (provider === "openrouter") {
+      await chrome.storage.local.remove("openRouterApiKey");
+      setOpenRouterKey(""); setOpenRouterSaved(false);
+    }
+  };
+
+  // Update preference order slot
+  const updatePref = async (slot, newProvider) => {
+    // Swap: if newProvider is already elsewhere, swap those slots
+    const current = [...prefOrder];
+    const existingSlot = current.indexOf(newProvider);
+    if (existingSlot !== -1 && existingSlot !== slot) {
+      current[existingSlot] = current[slot]; // put displaced one in old slot
+    }
+    current[slot] = newProvider;
+    setPrefOrder(current);
+    await chrome.storage.local.set({ apiPrefOrder: current });
   };
 
   // Run Command
@@ -181,6 +290,11 @@ export default function App() {
     return <Preloader message={preloaderMessage} />;
   }
 
+  // Render Onboarding if not completed
+  if (showOnboarding && onboardingChecked) {
+    return <Onboarding onComplete={handleOnboardingComplete} onSkip={handleOnboardingSkip} />;
+  }
+
   return (
     <div className="w-[360px] h-[520px] overflow-hidden bg-black text-white flex flex-col relative animate-fade-in">
       
@@ -215,7 +329,7 @@ export default function App() {
         <button 
           onClick={() => setShowSettings(true)}
           className="p-1.5 text-gray-400 hover:text-white hover:bg-white/5 active:scale-90 rounded-lg transition-all"
-          title="Configure Gemini API"
+          title="Configure API Keys & Preferences"
         >
           <Settings className="w-4 h-4" />
         </button>
@@ -224,16 +338,16 @@ export default function App() {
       {/* ---- Main Body Layout ---- */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
         
-        {/* API Key Banner Warning if missing */}
-        {!isKeySaved && (
+        {/* API Key Banner Warning if no key at all */}
+        {!anyKeySaved && (
           <div className="p-3 bg-neutral-950 border border-dashed border-red-500/30 rounded-xl flex items-start gap-2.5 animate-slide-up text-xs">
             <Lock className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
             <div>
-              <span className="font-bold text-red-400 block">Gemini API Key Required</span>
+              <span className="font-bold text-red-400 block">No API Key Configured</span>
               <p className="text-gray-400 text-[10px] leading-relaxed mb-1.5">
-                Paste your Gemini Flash key to activate browser execution tools.
+                Add at least one API key (Gemini, Groq, or OpenRouter) to activate Sidekick.
               </p>
-              <button 
+              <button
                 onClick={() => setShowSettings(true)}
                 className="px-2.5 py-1 text-[9px] font-mono bg-white text-black rounded hover:bg-gray-200 transition-all font-bold"
               >
@@ -244,7 +358,7 @@ export default function App() {
         )}
 
         {/* Action input panel */}
-        {isKeySaved && !agentState.isRunning && !agentState.askUserQuestion && (
+        {anyKeySaved && !agentState.isRunning && !agentState.askUserQuestion && (
           <div className="space-y-2.5 animate-slide-up">
             <div className="relative flex items-center">
               <input
@@ -401,70 +515,169 @@ export default function App() {
       {/* ---- Footer ---- */}
       <footer className="text-center text-[8px] font-mono text-gray-600 py-3 border-t border-white/[0.05] shrink-0 bg-neutral-950">
         TEXT MODE &bull; VOICE COMING SOON
-      </footer>
-
-      {/* ---- Settings Overlay Modal ---- */}
+      </footer>      {/* ---- Settings Overlay Modal ---- */}
       {showSettings && (
-        <div className="absolute inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center p-6 z-50 animate-fade-in">
+        <div className="absolute inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
           <div className="w-full bg-neutral-950 border border-white/10 rounded-2xl p-4 space-y-4 animate-slide-up">
+
+            {/* Header */}
             <div className="flex items-center justify-between border-b border-white/[0.08] pb-2.5">
               <div className="flex items-center gap-1.5">
                 <Settings className="w-4 h-4 text-white" />
-                <h3 className="text-xs font-black uppercase tracking-wider">Settings</h3>
+                <h3 className="text-xs font-black uppercase tracking-wider">API Keys & Preferences</h3>
               </div>
-              <button 
-                onClick={() => setShowSettings(false)}
-                className="p-1 text-gray-400 hover:text-white rounded-lg transition-all"
-              >
+              <button onClick={() => setShowSettings(false)} className="p-1 text-gray-400 hover:text-white rounded-lg transition-all">
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <label className="text-[9px] font-mono text-gray-400 uppercase tracking-widest block font-bold">Gemini API Key</label>
-                <p className="text-[8px] text-gray-500 leading-relaxed">
-                  Used directly from your browser to connect to gemini-2.5-flash. Key is never uploaded elsewhere.
-                </p>
+            <div className="space-y-3 max-h-[380px] overflow-y-auto pr-0.5">
+
+              {/* ── Preference Order ── */}
+              <div className="p-3 bg-white/[0.02] border border-white/[0.06] rounded-xl space-y-2">
+                <label className="text-[9px] font-mono text-gray-400 uppercase tracking-widest block font-bold">Preference Order</label>
+                <p className="text-[8px] text-gray-500 leading-relaxed">Sidekick uses your 1st-choice key first, then falls back in order.</p>
+                {[0, 1, 2].map((slot) => (
+                  <div key={slot} className="flex items-center gap-2">
+                    <span className="text-[9px] font-mono text-gray-500 w-4 shrink-0">{slot + 1}.</span>
+                    <select
+                      value={prefOrder[slot]}
+                      onChange={(e) => updatePref(slot, e.target.value)}
+                      className="flex-1 bg-neutral-900 border border-white/[0.1] rounded-lg px-2 py-1.5 text-[10px] font-mono text-white focus:outline-none focus:border-white/30"
+                    >
+                      <option value="gemini">Gemini</option>
+                      <option value="groq">Groq</option>
+                      <option value="openrouter">OpenRouter</option>
+                    </select>
+                    <span className={`text-[8px] font-mono px-1.5 py-0.5 rounded ${
+                      prefOrder[slot] === "gemini" && geminiSaved ? "bg-emerald-500/20 text-emerald-400" :
+                      prefOrder[slot] === "groq" && groqSaved ? "bg-emerald-500/20 text-emerald-400" :
+                      prefOrder[slot] === "openrouter" && openRouterSaved ? "bg-emerald-500/20 text-emerald-400" :
+                      "bg-red-500/10 text-red-400"
+                    }`}>
+                      {(prefOrder[slot] === "gemini" && geminiSaved) ||
+                       (prefOrder[slot] === "groq" && groqSaved) ||
+                       (prefOrder[slot] === "openrouter" && openRouterSaved) ? "● set" : "○ unset"}
+                    </span>
+                  </div>
+                ))}
               </div>
 
-              {isKeySaved ? (
-                <div className="p-3 bg-white/[0.02] border border-white/[0.06] rounded-xl flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <Lock className="w-3.5 h-3.5 text-emerald-500" />
-                    <span className="text-[10px] font-mono text-emerald-400 font-bold">API Key Stored Safely</span>
+              {/* ── Gemini Key ── */}
+              <KeyCard
+                label="Gemini API Key"
+                placeholder="AIzaSy..."
+                hint="Connects to gemini-2.5-flash. Never uploaded."
+                value={geminiKey}
+                onChange={setGeminiKey}
+                saved={geminiSaved}
+                onSave={() => saveKey("gemini")}
+                onDelete={() => deleteKey("gemini")}
+              />
+
+              {/* ── Groq Key ── */}
+              <KeyCard
+                label="Groq API Key"
+                placeholder="gsk_..."
+                hint="Fast inference via Groq Cloud."
+                value={groqKey}
+                onChange={setGroqKey}
+                saved={groqSaved}
+                onSave={() => saveKey("groq")}
+                onDelete={() => deleteKey("groq")}
+              />
+
+              {/* ── OpenRouter Key ── */}
+              <KeyCard
+                label="OpenRouter API Key"
+                placeholder="sk-or-..."
+                hint="Access 200+ models via OpenRouter."
+                value={openRouterKey}
+                onChange={setOpenRouterKey}
+                saved={openRouterSaved}
+                onSave={() => saveKey("openrouter")}
+                onDelete={() => deleteKey("openrouter")}
+              />
+
+              {/* ── Local AI Toggle ── */}
+              <div className="p-3 bg-white/[0.02] border border-white/[0.06] rounded-xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-[9px] font-mono text-gray-400 uppercase tracking-widest font-bold block">Local AI (Ollama)</span>
+                    <span className="text-[8px] text-gray-600">Run AI locally with Ollama. Requires Ollama running on localhost:11434.</span>
                   </div>
-                  <button 
-                    onClick={handleResetApiKey}
-                    className="px-2.5 py-1 text-[9px] font-mono bg-red-500/10 text-red-400 hover:bg-red-500/20 active:scale-95 rounded transition-all"
+                  <button
+                    onClick={toggleLocalAI}
+                    className={`relative w-10 h-5 rounded-full transition-colors ${
+                      localAIEnabled ? 'bg-emerald-500' : 'bg-neutral-700'
+                    }`}
                   >
-                    Delete Key
+                    <span className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-transform ${
+                      localAIEnabled ? 'left-6' : 'left-1'
+                    }`} />
                   </button>
                 </div>
-              ) : (
-                <div className="space-y-2">
-                  <input
-                    type="password"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="Enter your AIzaSy... API key"
-                    className="w-full bg-neutral-900 border border-white/[0.1] rounded-xl px-3 py-2 text-xs font-mono text-white placeholder-gray-600 focus:outline-none focus:border-white/30"
-                  />
-                  <button 
-                    onClick={handleSaveApiKey}
-                    disabled={!apiKey.trim()}
-                    className="w-full py-2 bg-white text-black hover:bg-gray-200 active:scale-95 disabled:opacity-40 disabled:hover:bg-white rounded-xl text-xs font-bold transition-all"
-                  >
-                    Save Configuration
-                  </button>
-                </div>
-              )}
+                {ollamaSetupDone && (
+                  <div className="flex items-center gap-1.5 text-[8px] text-emerald-400">
+                    <Cpu className="w-3 h-3" />
+                    <span>Ollama setup complete</span>
+                  </div>
+                )}
+              </div>
+
             </div>
 
-            <div className="text-[8px] font-mono text-gray-600 text-center pt-2">
+            <div className="text-[8px] font-mono text-gray-600 text-center pt-1">
               Sidekick Secured Sandboxed Loop
             </div>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Reusable API Key Card ──────────────────────────────────────────────────
+function KeyCard({ label, placeholder, hint, value, onChange, saved, onSave, onDelete }) {
+  return (
+    <div className="p-3 bg-white/[0.02] border border-white/[0.06] rounded-xl space-y-2">
+      <div className="flex items-center justify-between">
+        <div>
+          <span className="text-[9px] font-mono text-gray-400 uppercase tracking-widest font-bold block">{label}</span>
+          <span className="text-[8px] text-gray-600">{hint}</span>
+        </div>
+        {saved && (
+          <span className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400">● Saved</span>
+        )}
+      </div>
+      {saved ? (
+        <div className="flex items-center gap-2">
+          <div className="flex-1 bg-neutral-900 border border-white/[0.05] rounded-lg px-3 py-1.5 text-[10px] font-mono text-gray-500 tracking-widest">
+            ••••••••••••••••
+          </div>
+          <button
+            onClick={onDelete}
+            className="px-2.5 py-1.5 text-[9px] font-mono bg-red-500/10 text-red-400 hover:bg-red-500/20 active:scale-95 rounded-lg transition-all shrink-0"
+          >
+            Delete
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2">
+          <input
+            type="password"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={placeholder}
+            className="flex-1 bg-neutral-900 border border-white/[0.1] rounded-lg px-3 py-1.5 text-[10px] font-mono text-white placeholder-gray-600 focus:outline-none focus:border-white/30 min-w-0"
+          />
+          <button
+            onClick={onSave}
+            disabled={!value.trim()}
+            className="px-2.5 py-1.5 text-[9px] font-mono bg-white text-black hover:bg-gray-200 active:scale-95 disabled:opacity-30 rounded-lg transition-all shrink-0"
+          >
+            Save
+          </button>
         </div>
       )}
     </div>

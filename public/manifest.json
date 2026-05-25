@@ -9,10 +9,12 @@
     "scripting",
     "storage",
     "clipboardWrite",
-    "clipboardRead"
+    "clipboardRead",
+    "alarms"
   ],
   "host_permissions": [
-    "<all_urls>"
+    "<all_urls>",
+    "http://localhost:11434/*"
   ],
   "action": {
     "default_popup": "index.html",
@@ -34,6 +36,11 @@
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"]
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["assistant-notch.js"],
+      "run_at": "document_idle"
     }
   ]
 }

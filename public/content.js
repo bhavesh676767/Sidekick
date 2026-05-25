@@ -448,6 +448,314 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
       }
 
+      // Link-specific click
+      case "CLICK_LINK": {
+        const target = args.target;
+        const allLinks = Array.from(document.querySelectorAll("a"));
+        const el = findBestMatch(allLinks, target);
+        if (el) {
+          simulateClick(el);
+          sendResponse({ success: true, data: `Clicked link: ${target}` });
+        } else {
+          sendResponse({ success: false, error: `Could not find link: "${target}"` });
+        }
+        break;
+      }
+
+      // Button-specific click
+      case "CLICK_BUTTON": {
+        const target = args.target;
+        const allButtons = Array.from(document.querySelectorAll("button, [role='button'], input[type='button'], input[type='submit']"));
+        const el = findBestMatch(allButtons, target);
+        if (el) {
+          simulateClick(el);
+          sendResponse({ success: true, data: `Clicked button: ${target}` });
+        } else {
+          sendResponse({ success: false, error: `Could not find button: "${target}"` });
+        }
+        break;
+      }
+
+      // Input-specific click
+      case "CLICK_INPUT": {
+        const target = args.target;
+        const allInputs = Array.from(document.querySelectorAll("input:not([type='hidden']), textarea, [contenteditable='true']"));
+        const el = findBestMatch(allInputs, target);
+        if (el) {
+          simulateClick(el);
+          sendResponse({ success: true, data: `Clicked input: ${target}` });
+        } else {
+          sendResponse({ success: false, error: `Could not find input: "${target}"` });
+        }
+        break;
+      }
+
+      // Hover action
+      case "HOVER_TEXT": {
+        const target = args.target;
+        const allElements = Array.from(document.querySelectorAll("a, button, [role='button'], input, p, span, div, h1, h2, h3, h4"));
+        const el = findBestMatch(allElements, target);
+        if (el) {
+          const hoverEvent = new MouseEvent('mouseenter', {
+            bubbles: true,
+            cancelable: true,
+            view: window
+          });
+          el.dispatchEvent(hoverEvent);
+          sendResponse({ success: true, data: `Hovered: ${target}` });
+        } else {
+          sendResponse({ success: false, error: `Could not hover target: "${target}"` });
+        }
+        break;
+      }
+
+      // Double click action
+      case "DOUBLE_CLICK_TEXT": {
+        const target = args.target;
+        const allElements = Array.from(document.querySelectorAll("a, button, [role='button'], input, p, span, div, h1, h2, h3, h4"));
+        const el = findBestMatch(allElements, target);
+        if (el) {
+          const dblClickEvent = new MouseEvent('dblclick', {
+            bubbles: true,
+            cancelable: true,
+            view: window
+          });
+          el.dispatchEvent(dblClickEvent);
+          sendResponse({ success: true, data: `Double clicked: ${target}` });
+        } else {
+          sendResponse({ success: false, error: `Could not double click target: "${target}"` });
+        }
+        break;
+      }
+
+      // Find text on page
+      case "FIND_TEXT": {
+        const query = args.query;
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+        let node;
+        const matches = [];
+        while (node = walker.nextNode()) {
+          if (node.textContent.toLowerCase().includes(query.toLowerCase())) {
+            matches.push(node.textContent.trim().substring(0, 100));
+            if (matches.length >= 5) break;
+          }
+        }
+        sendResponse({ success: true, data: matches.length > 0 ? matches : "Text not found" });
+        break;
+      }
+
+      // Get links
+      case "GET_LINKS": {
+        const links = Array.from(document.querySelectorAll("a"))
+          .filter(isElementVisible)
+          .slice(0, 30)
+          .map(el => ({
+            id: getOrAssignSidekickId(el),
+            text: el.innerText.trim().substring(0, 50),
+            href: el.href
+          }));
+        sendResponse({ success: true, data: links });
+        break;
+      }
+
+      // Get buttons
+      case "GET_BUTTONS": {
+        const buttons = Array.from(document.querySelectorAll("button, [role='button'], input[type='button'], input[type='submit']"))
+          .filter(isElementVisible)
+          .slice(0, 30)
+          .map(el => ({
+            id: getOrAssignSidekickId(el),
+            text: el.innerText.trim().substring(0, 50)
+          }));
+        sendResponse({ success: true, data: buttons });
+        break;
+      }
+
+      // Get inputs
+      case "GET_INPUTS": {
+        const inputs = Array.from(document.querySelectorAll("input:not([type='hidden']), textarea, [contenteditable='true']"))
+          .filter(isElementVisible)
+          .slice(0, 20)
+          .map(el => ({
+            id: getOrAssignSidekickId(el),
+            text: (el.innerText || el.value || el.placeholder || "").trim().substring(0, 50),
+            type: el.type || el.tagName.toLowerCase()
+          }));
+        sendResponse({ success: true, data: inputs });
+        break;
+      }
+
+      // Get headings
+      case "GET_HEADINGS": {
+        const headings = Array.from(document.querySelectorAll("h1, h2, h3, h4"))
+          .filter(isElementVisible)
+          .slice(0, 15)
+          .map(el => ({
+            tag: el.tagName.toLowerCase(),
+            text: el.innerText.trim().substring(0, 60)
+          }));
+        sendResponse({ success: true, data: headings });
+        break;
+      }
+
+      // Get images
+      case "GET_IMAGES": {
+        const images = Array.from(document.querySelectorAll("img"))
+          .filter(isElementVisible)
+          .slice(0, 15)
+          .map(el => ({
+            id: getOrAssignSidekickId(el),
+            src: el.src,
+            alt: el.alt || ""
+          }));
+        sendResponse({ success: true, data: images });
+        break;
+      }
+
+      // Clear input
+      case "CLEAR_INPUT": {
+        const inputs = Array.from(document.querySelectorAll("input:not([type='hidden']), textarea, [contenteditable='true']"));
+        let el = null;
+        if (args.target) {
+          el = findBestMatch(inputs, args.target);
+        }
+        if (!el && inputs.length > 0) {
+          el = inputs.find(isElementVisible);
+        }
+        if (el) {
+          el.value = "";
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          sendResponse({ success: true, data: "Input cleared" });
+        } else {
+          sendResponse({ success: false, error: "No input found to clear" });
+        }
+        break;
+      }
+
+      // Paste text
+      case "PASTE_TEXT": {
+        const text = args.text;
+        const activeEl = document.activeElement;
+        if (activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA" || activeEl.hasAttribute("contenteditable"))) {
+          activeEl.value = (activeEl.value || "") + text;
+          activeEl.dispatchEvent(new Event("input", { bubbles: true }));
+          sendResponse({ success: true, data: "Text pasted" });
+        } else {
+          sendResponse({ success: false, error: "No active text input found" });
+        }
+        break;
+      }
+
+      // Select dropdown
+      case "SELECT_DROPDOWN": {
+        const selects = Array.from(document.querySelectorAll("select"));
+        let el = null;
+        if (args.target) {
+          el = findBestMatch(selects, args.target);
+        }
+        if (!el && selects.length > 0) {
+          el = selects.find(isElementVisible);
+        }
+        if (el) {
+          const option = Array.from(el.options).find(opt => 
+            opt.value === args.value || opt.text.toLowerCase().includes(args.value.toLowerCase())
+          );
+          if (option) {
+            el.value = option.value;
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+            sendResponse({ success: true, data: `Selected: ${option.text}` });
+          } else {
+            sendResponse({ success: false, error: `Option "${args.value}" not found` });
+          }
+        } else {
+          sendResponse({ success: false, error: "No dropdown found" });
+        }
+        break;
+      }
+
+      // Check checkbox
+      case "CHECK_CHECKBOX": {
+        const checkboxes = Array.from(document.querySelectorAll("input[type='checkbox']"));
+        let el = null;
+        if (args.target) {
+          el = findBestMatch(checkboxes, args.target);
+        }
+        if (!el && checkboxes.length > 0) {
+          el = checkboxes.find(isElementVisible);
+        }
+        if (el) {
+          el.checked = true;
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          sendResponse({ success: true, data: "Checkbox checked" });
+        } else {
+          sendResponse({ success: false, error: "No checkbox found" });
+        }
+        break;
+      }
+
+      // Uncheck checkbox
+      case "UNCHECK_CHECKBOX": {
+        const checkboxes = Array.from(document.querySelectorAll("input[type='checkbox']"));
+        let el = null;
+        if (args.target) {
+          el = findBestMatch(checkboxes, args.target);
+        }
+        if (!el && checkboxes.length > 0) {
+          el = checkboxes.find(isElementVisible);
+        }
+        if (el) {
+          el.checked = false;
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          sendResponse({ success: true, data: "Checkbox unchecked" });
+        } else {
+          sendResponse({ success: false, error: "No checkbox found" });
+        }
+        break;
+      }
+
+      // Press key
+      case "PRESS_KEY": {
+        const key = args.key || "Enter";
+        const activeEl = document.activeElement || document.body;
+        const event = new KeyboardEvent('keydown', { 
+          key: key, 
+          code: key, 
+          keyCode: key.charCodeAt(0), 
+          bubbles: true 
+        });
+        activeEl.dispatchEvent(event);
+        sendResponse({ success: true, data: `Pressed key: ${key}` });
+        break;
+      }
+
+      // Extract emails
+      case "EXTRACT_EMAILS": {
+        const emailRegex = /[\w.-]+@[\w.-]+\.\w+/g;
+        const text = document.body.innerText;
+        const emails = text.match(emailRegex) || [];
+        sendResponse({ success: true, data: [...new Set(emails)].slice(0, 10) });
+        break;
+      }
+
+      // Extract phone numbers
+      case "EXTRACT_PHONE_NUMBERS": {
+        const phoneRegex = /[\+]?[(]?[0-9]{1,3}[)]?[-\s\.]?[(]?[0-9]{1,3}[)]?[-\s\.]?[0-9]{3,6}[-\s\.]?[0-9]{3,6}/g;
+        const text = document.body.innerText;
+        const phones = text.match(phoneRegex) || [];
+        sendResponse({ success: true, data: [...new Set(phones)].slice(0, 10) });
+        break;
+      }
+
+      // Extract dates
+      case "EXTRACT_DATES": {
+        const dateRegex = /\b(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}|\d{4}[\/-]\d{1,2}[\/-]\d{1,2}|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4})\b/gi;
+        const text = document.body.innerText;
+        const dates = text.match(dateRegex) || [];
+        sendResponse({ success: true, data: [...new Set(dates)].slice(0, 10) });
+        break;
+      }
+
       default:
         // Handle remaining tools as generic click or message routes
         sendResponse({ success: false, error: `DOM Action type not supported: ${type}` });
