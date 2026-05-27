@@ -50,6 +50,7 @@ if (!window.__sidekickContentRuntimeLoaded) {
     result: null,
     logs: [],
     askUserQuestion: null,
+    quickReplies: [],
     suggestedFollowup: null
   };
 
@@ -927,6 +928,10 @@ if (!window.__sidekickContentRuntimeLoaded) {
       }
       .sk-dot-loader span:nth-child(2) { animation-delay: .15s; }
       .sk-dot-loader span:nth-child(3) { animation-delay: .3s; }
+      .sk-notch-logo .sk-dot-loader span,
+      .sk-notch-badge .sk-dot-loader span {
+        background: #11120a;
+      }
       @keyframes sk-pulse {
         0%, 100% { transform: scale(0.96); opacity: .36; }
         50% { transform: scale(1.08); opacity: 1; }
@@ -939,13 +944,260 @@ if (!window.__sidekickContentRuntimeLoaded) {
         0%, 100% { transform: translateY(0); opacity: .25; }
         50% { transform: translateY(-4px); opacity: 1; }
       }
+      .sk-notch-shell {
+        min-width: 0;
+        min-height: 0;
+        gap: 0;
+        display: block;
+        overflow: visible;
+        background: transparent;
+        border: 0;
+        box-shadow: none;
+        backdrop-filter: none;
+        transition: width 260ms cubic-bezier(.2,.9,.2,1), height 260ms cubic-bezier(.2,.9,.2,1);
+      }
+      .sk-theme-dark .sk-notch-shell {
+        background: transparent;
+        border: 0;
+        box-shadow: none;
+      }
+      .sk-notch-shell.sk-collapsed {
+        width: 236px;
+        height: 48px;
+      }
+      .sk-notch-shell.sk-expanded {
+        width: min(390px, calc(100vw - 28px));
+        height: auto;
+        border-radius: 24px;
+      }
+      .sk-notch-card {
+        position: relative;
+        width: 100%;
+        color: #14140f;
+      }
+      .sk-theme-dark .sk-notch-card { color: #f6f2e8; }
+      .sk-notch-pill {
+        width: 100%;
+        height: 48px;
+        border: 1px solid rgba(20,20,15,0.10);
+        border-radius: 999px;
+        background: #fffdf6;
+        color: #14140f;
+        box-shadow: 0 14px 30px rgba(26,24,18,0.14);
+        display: grid;
+        grid-template-columns: auto 1fr auto auto;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 7px 6px 6px;
+        cursor: grab;
+        position: relative;
+        transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+      }
+      .sk-theme-dark .sk-notch-pill {
+        background: #11110f;
+        color: #f6f2e8;
+        border-color: rgba(255,255,255,0.10);
+        box-shadow: 0 18px 34px rgba(0,0,0,0.34);
+      }
+      .sk-notch-pill:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 18px 36px rgba(26,24,18,0.18);
+      }
+      .sk-theme-dark .sk-notch-pill:hover { box-shadow: 0 20px 38px rgba(0,0,0,0.42); }
+      .sk-notch-pill:active { cursor: grabbing; transform: translateY(0) scale(.99); }
+      .sk-notch-logo {
+        width: 36px;
+        height: 36px;
+        border-radius: 999px;
+        background: #dfff14;
+        display: grid;
+        place-items: center;
+        overflow: hidden;
+        color: #11120a;
+      }
+      .sk-notch-logo img {
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        object-fit: cover;
+      }
+      .sk-notch-meta {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        text-align: left;
+      }
+      .sk-notch-time {
+        font-size: 15px;
+        line-height: 1;
+        font-weight: 950;
+        letter-spacing: 0;
+      }
+      .sk-notch-status {
+        font-size: 10px;
+        line-height: 1.1;
+        color: rgba(20,20,15,0.56);
+        font-weight: 850;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .sk-theme-dark .sk-notch-status { color: rgba(246,242,232,0.58); }
+      .sk-notch-badge {
+        height: 28px;
+        min-width: 72px;
+        border-radius: 999px;
+        padding: 0 10px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        background: #dfff14;
+        color: #11120a;
+        font-size: 10px;
+        font-weight: 950;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+      }
+      .sk-notch-close {
+        width: 26px;
+        height: 26px;
+        border-radius: 999px;
+        border: 0;
+        cursor: pointer;
+        display: grid;
+        place-items: center;
+        background: rgba(20,20,15,0.08);
+        color: rgba(20,20,15,0.74);
+        font-size: 17px;
+        line-height: 1;
+        opacity: 0;
+        transform: scale(.86);
+        transition: opacity 140ms ease, transform 140ms ease, background 140ms ease;
+      }
+      .sk-theme-dark .sk-notch-close {
+        background: rgba(255,255,255,0.10);
+        color: rgba(246,242,232,0.78);
+      }
+      .sk-notch-card:hover .sk-notch-close,
+      .sk-notch-shell.sk-expanded .sk-notch-close {
+        opacity: 1;
+        transform: scale(1);
+      }
+      .sk-notch-close:hover { background: #ffef86; color: #11120a; }
+      .sk-notch-expanded-panel {
+        margin-top: 8px;
+        border-radius: 24px;
+        background: #fffdf6;
+        border: 1px solid rgba(20,20,15,0.10);
+        box-shadow: 0 20px 44px rgba(26,24,18,0.18);
+        overflow: hidden;
+        animation: sk-panel-in 220ms cubic-bezier(.2,.9,.2,1);
+      }
+      .sk-theme-dark .sk-notch-expanded-panel {
+        background: #171714;
+        border-color: rgba(255,255,255,0.10);
+        box-shadow: 0 24px 48px rgba(0,0,0,0.42);
+      }
+      .sk-notch-panel-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 14px 14px 8px;
+      }
+      .sk-notch-title {
+        font-size: 11px;
+        font-weight: 950;
+        color: rgba(20,20,15,0.48);
+        letter-spacing: .12em;
+        text-transform: uppercase;
+      }
+      .sk-theme-dark .sk-notch-title { color: rgba(246,242,232,0.44); }
+      .sk-notch-current {
+        font-size: 12px;
+        font-weight: 850;
+        color: rgba(20,20,15,0.82);
+        margin-top: 2px;
+        max-width: 250px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .sk-theme-dark .sk-notch-current { color: rgba(246,242,232,0.84); }
+      .sk-notch-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 0 14px 14px;
+      }
+      .sk-notch-transcript,
+      .sk-notch-response {
+        border-radius: 17px;
+        background: #f4eedf;
+        border: 1px solid rgba(20,20,15,0.08);
+        padding: 10px 12px;
+        font-size: 12px;
+        line-height: 1.45;
+        color: rgba(20,20,15,0.84);
+        font-weight: 750;
+      }
+      .sk-theme-dark .sk-notch-transcript,
+      .sk-theme-dark .sk-notch-response {
+        background: rgba(255,255,255,0.065);
+        border-color: rgba(255,255,255,0.08);
+        color: rgba(246,242,232,0.86);
+      }
+      .sk-notch-transcript {
+        min-height: 0;
+        color: rgba(20,20,15,0.58);
+      }
+      .sk-theme-dark .sk-notch-transcript { color: rgba(246,242,232,0.58); }
+      .sk-notch-response {
+        min-height: 70px;
+        max-height: min(44vh, 290px);
+        overflow-y: auto;
+        white-space: pre-wrap;
+      }
+      .sk-notch-response::-webkit-scrollbar { width: 8px; }
+      .sk-notch-response::-webkit-scrollbar-thumb { background: rgba(20,20,15,0.16); border-radius: 999px; }
+      .sk-theme-dark .sk-notch-response::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); }
+      .sk-notch-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      @media (hover: none), (pointer: coarse) {
+        .sk-notch-close {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
+      @media (max-width: 520px) {
+        .sk-notch-shell.sk-collapsed {
+          width: min(224px, calc(100vw - 28px));
+        }
+        .sk-notch-shell.sk-expanded {
+          width: calc(100vw - 28px);
+        }
+        .sk-notch-badge {
+          min-width: 62px;
+          padding: 0 8px;
+        }
+      }
+      @keyframes sk-panel-in {
+        from { opacity: 0; transform: translateY(-6px) scale(.985); }
+        to { opacity: 1; transform: translateY(0) scale(1); }
+      }
     `;
     document.documentElement.appendChild(style);
   }
 
   function getViewportPosition(position) {
-    const width = uiState.notchCollapsed ? 56 : 320;
-    const height = uiState.notchCollapsed ? 56 : 360;
+    const width = uiState.notchCollapsed ? Math.min(236, window.innerWidth - 28) : Math.min(390, window.innerWidth - 28);
+    const height = uiState.notchCollapsed ? 48 : Math.min(520, window.innerHeight - 28);
     const margin = 18;
     const maxX = Math.max(margin, window.innerWidth - width - margin);
     const maxY = Math.max(margin, window.innerHeight - height - margin);
@@ -1016,6 +1268,10 @@ if (!window.__sidekickContentRuntimeLoaded) {
   function destroyNotch() {
     stopSpeaking();
     stopListening();
+    if (clockTimer) {
+      clearInterval(clockTimer);
+      clockTimer = null;
+    }
     if (rootEl) rootEl.remove();
     rootEl = null;
   }
@@ -1062,6 +1318,11 @@ if (!window.__sidekickContentRuntimeLoaded) {
     }
 
     ensureStyles();
+    if (!clockTimer) {
+      clockTimer = setInterval(() => {
+        if (uiState.sidekickEnabled && rootEl) renderNotch();
+      }, 30000);
+    }
     if (!rootEl) {
       rootEl = document.createElement("div");
       rootEl.id = SIDEKICK_IDS.root;
@@ -1128,6 +1389,68 @@ if (!window.__sidekickContentRuntimeLoaded) {
       </div>
     `;
 
+    const displayStatus = getStatusLabel(stateLabel);
+    const displayTime = formatNotchTime();
+    const currentLabel = agentState.askUserQuestion || agentState.currentAction || agentState.command || "Ready on this page";
+    const quickItems = Array.isArray(agentState.quickReplies) && agentState.quickReplies.length
+      ? agentState.quickReplies.map((item) => ({
+        label: item.label || item.value || item,
+        command: item.value || item.label || item
+      }))
+      : QUICK_ACTIONS;
+    rootEl.innerHTML = `
+      <div class="sk-notch-shell ${themeClass} ${collapsed ? "sk-collapsed" : "sk-expanded"}">
+        ${assistTipState.activeTip && collapsed ? `
+          <div class="sk-assist-tip">
+            <span>${escapeHtml(assistTipState.activeTip.text)}</span>
+            <button data-sk-tip-action="accept">Yes</button>
+            <button data-sk-tip-action="dismiss" aria-label="Dismiss">&times;</button>
+          </div>
+        ` : ""}
+        <div class="sk-notch-card">
+          <button class="sk-notch-pill sk-${stateLabel.toLowerCase().replace(/\s+/g, "-")}" data-sk-action="${collapsed ? "expand" : "drag-handle"}" aria-label="${collapsed ? "Open Sidekick" : "Move Sidekick"}">
+            <span class="sk-notch-logo">${createStateIcon()}</span>
+            <span class="sk-notch-meta">
+              <span class="sk-notch-time">${escapeHtml(displayTime)}</span>
+              <span class="sk-notch-status">${escapeHtml(currentLabel)}</span>
+            </span>
+            <span class="sk-notch-badge">${agentState.isRunning || voiceState.mode === "processing" ? createStateIcon() : ""}${escapeHtml(displayStatus)}</span>
+            <span class="sk-notch-close" data-sk-action="close" role="button" aria-label="Close Sidekick">&times;</span>
+          </button>
+          ${collapsed ? "" : `
+            <div class="sk-notch-expanded-panel">
+              <div class="sk-notch-panel-head">
+                <div>
+                  <div class="sk-notch-title">Sidekick</div>
+                  <div class="sk-notch-current">${escapeHtml(displayStatus)}</div>
+                </div>
+                <button class="sk-notch-btn sk-notch-btn-secondary" data-sk-action="collapse" aria-label="Collapse Sidekick">Minimize</button>
+              </div>
+              <div class="sk-notch-panel">
+                ${transcript ? `<div class="sk-notch-transcript">${escapeHtml(transcript)}</div>` : ""}
+                <div class="sk-notch-response">${escapeHtml(responseText || "Ready.")}</div>
+                <div class="sk-notch-input-row sk-notch-input-row-text">
+                  <input class="sk-notch-input" data-sk-input="command" placeholder="${agentState.askUserQuestion ? "Answer Sidekick..." : "Ask Sidekick..."}" />
+                  <button class="sk-notch-btn sk-notch-btn-primary" data-sk-action="send" aria-label="Send command">Go</button>
+                </div>
+                <div class="sk-notch-footer">
+                  <div class="sk-notch-mini">Prompt mode</div>
+                  <div class="sk-notch-mini">${/Windows/i.test(navigator.userAgent) ? "Windows + H for dictation" : "Typing only"}</div>
+                </div>
+                <div class="sk-notch-quick">
+                  ${quickItems.map((item) => `<button class="sk-notch-chip" data-sk-quick="${escapeHtml(item.command)}">${escapeHtml(item.label)}</button>`).join("")}
+                </div>
+                <div class="sk-notch-footer">
+                  <div class="sk-notch-mini">${agentState.command ? `Current: ${escapeHtml(agentState.command)}` : "Pinned to this page."}</div>
+                  <button class="sk-notch-btn sk-notch-btn-secondary" data-sk-action="stop">${agentState.isRunning ? "Stop" : "Close"}</button>
+                </div>
+              </div>
+            </div>
+          `}
+        </div>
+      </div>
+    `;
+
     setRootPosition();
 
     const pill = rootEl.querySelector(".sk-notch-pill");
@@ -1135,6 +1458,7 @@ if (!window.__sidekickContentRuntimeLoaded) {
     const sendButton = rootEl.querySelector("[data-sk-action='send']");
     const stopButton = rootEl.querySelector("[data-sk-action='stop']");
     const collapseButton = rootEl.querySelector("[data-sk-action='collapse']");
+    const closeButton = rootEl.querySelector("[data-sk-action='close']");
     const tipAccept = rootEl.querySelector("[data-sk-tip-action='accept']");
     const tipDismiss = rootEl.querySelector("[data-sk-tip-action='dismiss']");
 
@@ -1148,6 +1472,16 @@ if (!window.__sidekickContentRuntimeLoaded) {
       tipDismiss.addEventListener("click", (event) => {
         event.stopPropagation();
         dismissAssistTip(assistTipState.activeTip?.kind || "form");
+      });
+    }
+    if (closeButton) {
+      closeButton.addEventListener("pointerdown", (event) => {
+        event.stopPropagation();
+      });
+      closeButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        chrome.runtime.sendMessage({ action: "REMOVE_NOTCH" });
+        destroyNotch();
       });
     }
 
@@ -1300,6 +1634,10 @@ if (!window.__sidekickContentRuntimeLoaded) {
 
     if (message?.action === "STATE_UPDATED") {
       agentState = message.state || agentState;
+      if ((agentState.askUserQuestion || agentState.result?.text) && uiState.notchCollapsed) {
+        uiState.notchCollapsed = false;
+        chrome.runtime.sendMessage({ action: "SET_NOTCH_COLLAPSED", collapsed: false });
+      }
       if (uiState.sidekickEnabled) {
         renderNotch();
         setTimeout(refreshAssistTip, 500);
@@ -1311,6 +1649,10 @@ if (!window.__sidekickContentRuntimeLoaded) {
     if (message?.action === "VOICE_STATE_UPDATED") {
       const previousResponse = voiceState.lastResponse;
       voiceState = { ...voiceState, ...(message.voiceState || {}) };
+      if (voiceState.lastResponse && voiceState.lastResponse !== previousResponse && uiState.notchCollapsed) {
+        uiState.notchCollapsed = false;
+        chrome.runtime.sendMessage({ action: "SET_NOTCH_COLLAPSED", collapsed: false });
+      }
       if (uiState.sidekickEnabled) renderNotch();
       sendResponse({ success: true });
       return true;

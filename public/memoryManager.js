@@ -9,7 +9,12 @@ const SIDEKICK_MEMORY_DEFAULT = {
     preferredWritingTone: "simple",
     prefersShortReplies: true,
     formFillStyle: "ask_step_by_step",
-    neverAutoSubmitForms: true
+    neverAutoSubmitForms: true,
+    youtubeFullscreen: "ask",
+    preferredMarketplace: "ask",
+    preferredSummaryLength: "short",
+    formFillMode: "step_by_step",
+    workflowFollowupCounts: {}
   },
   interactionPatterns: {},
   recentCommands: [],

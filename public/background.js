@@ -1,5 +1,16 @@
 try {
-  importScripts("vendor/sidekick-local-libs.js", "memoryManager.js", "followupEngine.js");
+  importScripts(
+    "vendor/sidekick-local-libs.js",
+    "memoryManager.js",
+    "followupEngine.js",
+    "workflows/shoppingWorkflows.js",
+    "workflows/youtubeWorkflows.js",
+    "workflows/researchWorkflows.js",
+    "workflows/writingWorkflows.js",
+    "workflows/productivityWorkflows.js",
+    "workflows/formWorkflows.js",
+    "workflows/registry.js"
+  );
 } catch (err) {
   console.warn("Sidekick modular helpers unavailable", err);
 }
@@ -54,6 +65,7 @@ let activeState = {
   result: null,
   currentAction: "Idle",
   askUserQuestion: null,
+  quickReplies: [],
   suggestedFollowup: null,
   history: [], // API message history (kept short: max 3 steps)
   isFirstStepOfTask: false,
@@ -82,6 +94,76 @@ async function getLocalMemory(key) {
     console.warn("Sidekick localForage read failed", err);
   }
   return null;
+}
+
+async function saveWorkflowProgress(update = {}) {
+  const memory = await getSidekickMemory();
+  const workflow = {
+    taskId: activeState.taskId,
+    command: activeState.command,
+    currentStep: activeState.currentStep,
+    completed: false,
+    logs: activeState.logs,
+    visitedSites: update.visitedSites || [],
+    extractedData: update.extractedData || [],
+    workflowId: update.workflowId || activeState.workflowId || "",
+    timestamp: Date.now(),
+    ...update
+  };
+  memory.openWorkflows = [workflow, ...(memory.openWorkflows || []).filter((item) => item.taskId !== activeState.taskId)].slice(0, 30);
+  await saveSidekickMemory(memory);
+  await saveLocalMemory(`sidekick:workflow:${activeState.taskId || workflow.workflowId}`, workflow);
+  return workflow;
+}
+
+function workflowQuickReplies(buttons = []) {
+  return buttons.map((label) => ({ label, value: label }));
+}
+
+async function askWorkflowFollowup({ workflowId, question, buttons, preferenceKey, continuation }) {
+  const quickReplies = workflowQuickReplies(buttons);
+  await updateVoiceState({ mode: "idle", lastResponse: question });
+  await updateState({
+    isRunning: false,
+    currentAction: "Waiting for workflow choice...",
+    askUserQuestion: question,
+    quickReplies,
+    pendingWorkflow: {
+      workflowId,
+      preferenceKey,
+      continuation,
+      question,
+      buttons,
+      askedAt: Date.now()
+    }
+  });
+  return { success: true, data: question, askFollowup: true };
+}
+
+async function applyWorkflowPreference(preferenceKey, response) {
+  if (!preferenceKey) return;
+  const lower = String(response || "").toLowerCase();
+  const memory = await getSidekickMemory();
+  const counts = { ...(memory.preferences.workflowFollowupCounts || {}) };
+  const countKey = `${preferenceKey}:${lower}`;
+  counts[countKey] = (counts[countKey] || 0) + 1;
+  memory.preferences.workflowFollowupCounts = counts;
+
+  if (preferenceKey === "youtubeFullscreen") {
+    if (/always/.test(lower)) memory.preferences.youtubeFullscreen = "always";
+    else if (/don't ask|dont ask|no/.test(lower) && counts[countKey] >= 3) memory.preferences.youtubeFullscreen = "never";
+    else if (/don't ask|dont ask/.test(lower)) memory.preferences.youtubeFullscreen = "never";
+  }
+  if (preferenceKey === "preferredMarketplace") {
+    if (/amazon/.test(lower)) memory.preferences.preferredMarketplace = "amazon";
+    if (/flipkart/.test(lower)) memory.preferences.preferredMarketplace = "flipkart";
+    if (/compare/.test(lower)) memory.preferences.preferredMarketplace = "compare";
+  }
+  if (preferenceKey === "preferredSummaryLength") {
+    if (/detailed/.test(lower)) memory.preferences.preferredSummaryLength = "detailed";
+    if (/quick|short/.test(lower)) memory.preferences.preferredSummaryLength = "short";
+  }
+  await saveSidekickMemory(memory);
 }
 
 let voiceState = {
@@ -478,7 +560,10 @@ function stopAgentLoop(message, isError = false) {
     result: {
       type: isError ? "error" : "success",
       text: message
-    }
+    },
+    askUserQuestion: null,
+    quickReplies: [],
+    pendingWorkflow: null
   });
   updateVoiceState({
     mode: isError ? "error" : "idle",
@@ -552,10 +637,149 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   }
 });
 
+// Strip conversational prefixes like "can you", "please", "could you open", etc.
+function stripConversationalPrefix(command) {
+  let cleaned = String(command || "").trim();
+  const prefixes = [
+    /^(?:can|could|would|will)\s+(?:you|u)\s+(?:please\s+)?/i,
+    /^(?:please|hey\s+sidekick|sidekick|go\s+ahead\s+and|i\s+want\s+to|i\s+need\s+to|help\s+me)\s+/i
+  ];
+  let replaced = true;
+  while (replaced) {
+    const original = cleaned;
+    for (const regex of prefixes) {
+      cleaned = cleaned.replace(regex, "");
+    }
+    cleaned = cleaned.trim();
+    if (cleaned === original) {
+      replaced = false;
+    }
+  }
+  return cleaned;
+}
+
+// Robust check to decide if a command represents a multi-step task or requires browser interaction
+function isActionOrMultiStep(command) {
+  const lower = String(command || "").toLowerCase().trim();
+
+  // 1. Simple exact/immediate commands (fast local paths)
+  const simpleExactMatches = [
+    "scroll down", "scroll down a bit", "scroll up", "go back", "go forward",
+    "click first result", "open first result", "open the best product", "open best product",
+    "close tab", "close this tab", "close window", "reload page", "get current url", "get page title"
+  ];
+  if (simpleExactMatches.includes(lower)) {
+    return false;
+  }
+
+  if (/^zoom (in|out)(?: a little)?$/.test(lower) || /^(?:reset zoom|normal zoom)$/.test(lower)) {
+    return false;
+  }
+
+  // 2. Explicit coordination words (indicates multi-step flow)
+  if (/\b(and|then|after that|next|following)\b/.test(lower)) {
+    return true;
+  }
+
+  // 3. Action verbs that require browser interaction
+  const actionVerbs = [
+    "post", "message", "dm", "tweet", "write", "comment", "reply", "publish",
+    "share", "fill", "apply", "click", "type", "select", "check", "uncheck",
+    "submit", "create", "make a", "add to", "send", "paste", "clear", "search for"
+  ];
+
+  for (const verb of actionVerbs) {
+    if (new RegExp(`\\b${verb}\\b`).test(lower)) {
+      // Allow noun phrases in research queries like "reddit posts on AI"
+      if (verb === "post" && (lower.includes("posts") || lower.includes("opinions on") || lower.includes("search for"))) {
+        continue;
+      }
+      if (verb === "message" && (lower.includes("messages") || lower.includes("history"))) {
+        continue;
+      }
+      return true;
+    }
+  }
+
+  // 4. Combined open + interaction check
+  if (/^(?:open|go to|launch|visit|bring up|navigate to)\s+/.test(lower)) {
+    if (/\b(?:search|click|post|fill|type|find|write|send|message|dm)\b/.test(lower)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 // Local Cheap Routing Parser to optimize API tokens
 function tryLocalRouting(command) {
-  const lower = command.toLowerCase().trim();
+  const conversationalCleaned = stripConversationalPrefix(command);
+  const lower = conversationalCleaned.toLowerCase().trim();
   const cleaned = lower.replace(/[?.!]+$/g, "").trim();
+
+  // 1. Exact/immediate simple actions (fast local path)
+  if (lower === "scroll down" || lower === "scroll down a bit") {
+    return { tool: "scroll_down", args: {} };
+  }
+  if (lower === "scroll up") {
+    return { tool: "scroll_up", args: {} };
+  }
+  if (lower === "go back") {
+    return { tool: "go_back", args: {} };
+  }
+  if (lower === "go forward") {
+    return { tool: "go_forward", args: {} };
+  }
+  if (lower === "click first result" || lower === "open first result") {
+    return { tool: "click_link", args: { target: "first result" } };
+  }
+  if (lower === "open the best product" || lower === "open best product") {
+    return { tool: "open_best_product", args: {} };
+  }
+  if (/^zoom in(?: a little)?$/.test(lower)) {
+    return { tool: "zoom_in", args: {} };
+  }
+  if (/^zoom out(?: a little)?$/.test(lower)) {
+    return { tool: "zoom_out", args: {} };
+  }
+  if (/^(?:reset zoom|normal zoom)$/.test(lower)) {
+    return { tool: "reset_zoom", args: {} };
+  }
+  if (lower === "close tab" || lower === "close this tab") {
+    return { tool: "close_current_tab", args: {} };
+  }
+  if (lower === "close window") {
+    return { tool: "close_window", args: {} };
+  }
+  if (lower === "reload page") {
+    return { tool: "reload_page", args: {} };
+  }
+  if (lower === "get current url") {
+    return { tool: "get_current_url", args: {} };
+  }
+  if (lower === "get page title") {
+    return { tool: "get_page_title", args: {} };
+  }
+
+  // 2. Bypass local routing for complex or action-oriented tasks
+  if (isActionOrMultiStep(conversationalCleaned)) {
+    return null;
+  }
+
+  // 3. Evaluate workflows & category routes
+  const presetWorkflowRoute = self.SidekickWorkflows?.detect?.(command, self.__sidekickLastMemory || {});
+  if (presetWorkflowRoute && presetWorkflowRoute.missing?.length) {
+    return {
+      tool: "ask_user",
+      args: {
+        question: `What ${presetWorkflowRoute.missing[0]} should I use?`,
+        quickReplies: ["Use page context", "Cancel"]
+      }
+    };
+  }
+  if (presetWorkflowRoute) {
+    return { tool: presetWorkflowRoute.tool, args: presetWorkflowRoute.args };
+  }
   const workflowRoute = classifyAdvancedWorkflow(command);
   if (workflowRoute) {
     return { tool: workflowRoute.tool, args: workflowRoute.args };
@@ -919,33 +1143,101 @@ function classifySmartRoute(command) {
   const lower = String(command || "").toLowerCase().trim();
   const query = cleanRouteQuery(command);
 
+  // If the command explicitly mentions a specific platform, we should not route it to a category
+  // that starts with a different platform.
+  const platforms = ["instagram", "x", "twitter", "linkedin", "reddit", "discord", "youtube", "github", "spotify", "notion", "amazon", "flipkart", "stackoverflow"];
+  const mentionedPlatform = platforms.find(p => lower.includes(p));
+
+  const checkPlatformMismatch = (intent) => {
+    if (!mentionedPlatform) return false;
+    const route = SMART_ROUTE_DEFINITIONS[intent] || ["google"];
+    const firstSite = route[0];
+    const normalizedFirst = firstSite === "x" ? "x" : firstSite;
+    const normalizedMentioned = mentionedPlatform === "twitter" ? "x" : mentionedPlatform;
+    return normalizedFirst !== normalizedMentioned;
+  };
+
   if (/^(?:open|go to|launch|visit|bring up)\s+/.test(lower)) {
     return null;
   }
 
   if (/research\s+ai\s+tools?/.test(lower)) return smartRouteArgs("research", query || "AI tools", ["google", "reddit", "github", "youtube"]);
   if (/research\s+ai\s+browser\s+agents?/.test(lower)) return smartRouteArgs("research", query || "AI browser agents", ["google", "reddit", "github", "youtube"]);
-  if (/startup research|research\s+(?:a\s+)?startup|competitor research|company research/.test(lower)) return smartRouteArgs("startup", query, SMART_ROUTE_DEFINITIONS.startup);
-  if (/(?:funding|startup|business|saas inspiration|landing page inspiration|yc startup|indie product|product hunt)/.test(lower)) return smartRouteArgs("business", query, SMART_ROUTE_DEFINITIONS.business);
-  if (/(?:ui inspiration|design inspiration|website inspiration|font|icons?|color palette|design system|creative)/.test(lower)) return smartRouteArgs("design", query, SMART_ROUTE_DEFINITIONS.design);
-  if (/(?:stock footage|ai video|ai image|audio|music|thumbnail|video editing|content creation)/.test(lower)) return smartRouteArgs("creative", query, SMART_ROUTE_DEFINITIONS.creative);
-  if (/(?:stocks?|crypto|finance|market|trading|coin|financial news|startup investing)/.test(lower)) return smartRouteArgs("finance", query, SMART_ROUTE_DEFINITIONS.finance);
-  if (/(?:remote jobs?|freelanc|tech jobs?|internships?|frontend internships?)/.test(lower)) return smartRouteArgs("jobs", query, SMART_ROUTE_DEFINITIONS.jobs);
-  if (/(?:global news|tech news|ai news|trends?|trend tracking|social trends)/.test(lower)) return smartRouteArgs("news", query, SMART_ROUTE_DEFINITIONS.news);
-  if (/(?:maps?|navigation|hotels?|flights?|reviews?|trip|travel|trains? india|irctc)/.test(lower)) return smartRouteArgs("travel", query, SMART_ROUTE_DEFINITIONS.travel);
-  if (/(?:google sheets|google slides|clickup|automation targets?|productivity automation)/.test(lower)) return smartRouteArgs("automation", query, SMART_ROUTE_DEFINITIONS.automation);
-  if (/best\s+(?:online\s+)?course|find\s+.*course|learn\s+.*course/.test(lower)) return smartRouteArgs("education", query, SMART_ROUTE_DEFINITIONS.education);
-  if (/coding help|debug|stackoverflow|stack overflow|mdn|developer docs/.test(lower)) return smartRouteArgs("dev", query, SMART_ROUTE_DEFINITIONS.dev);
-  if (/react animation libraries|npm package|javascript library|js library|coding library|developer tool|api docs/.test(lower)) return smartRouteArgs("dev", query, ["google", "github", "npm", "mdn"]);
-  if (/best laptop|gaming laptop|laptop under|phone under|best phone|headphones under/.test(lower)) return smartRouteArgs("ecommerce", query, SMART_ROUTE_DEFINITIONS.ecommerce);
-  if (/play\s+.*(?:music|song|lofi|playlist)|relaxing lofi|watch\s+.*(?:video|movie|trailer)|entertainment/.test(lower)) return smartRouteArgs("media", query, SMART_ROUTE_DEFINITIONS.media);
+  if (/startup research|research\s+(?:a\s+)?startup|competitor research|company research/.test(lower)) {
+    if (checkPlatformMismatch("startup")) return null;
+    return smartRouteArgs("startup", query, SMART_ROUTE_DEFINITIONS.startup);
+  }
+  if (/(?:funding|startup|business|saas inspiration|landing page inspiration|yc startup|indie product|product hunt)/.test(lower)) {
+    if (checkPlatformMismatch("business")) return null;
+    return smartRouteArgs("business", query, SMART_ROUTE_DEFINITIONS.business);
+  }
+  if (/(?:ui inspiration|design inspiration|website inspiration|font|icons?|color palette|design system|creative)/.test(lower)) {
+    if (checkPlatformMismatch("design")) return null;
+    return smartRouteArgs("design", query, SMART_ROUTE_DEFINITIONS.design);
+  }
+  if (/(?:stock footage|ai video|ai image|audio|music|thumbnail|video editing|content creation)/.test(lower)) {
+    if (checkPlatformMismatch("creative")) return null;
+    return smartRouteArgs("creative", query, SMART_ROUTE_DEFINITIONS.creative);
+  }
+  if (/(?:stocks?|crypto|finance|market|trading|coin|financial news|startup investing)/.test(lower)) {
+    if (checkPlatformMismatch("finance")) return null;
+    return smartRouteArgs("finance", query, SMART_ROUTE_DEFINITIONS.finance);
+  }
+  if (/(?:remote jobs?|freelanc|tech jobs?|internships?|frontend internships?)/.test(lower)) {
+    if (checkPlatformMismatch("jobs")) return null;
+    return smartRouteArgs("jobs", query, SMART_ROUTE_DEFINITIONS.jobs);
+  }
+  if (/(?:global news|tech news|ai news|trends?|trend tracking|social trends)/.test(lower)) {
+    if (checkPlatformMismatch("news")) return null;
+    return smartRouteArgs("news", query, SMART_ROUTE_DEFINITIONS.news);
+  }
+  if (/(?:maps?|navigation|hotels?|flights?|reviews?|trip|travel|trains? india|irctc)/.test(lower)) {
+    if (checkPlatformMismatch("travel")) return null;
+    return smartRouteArgs("travel", query, SMART_ROUTE_DEFINITIONS.travel);
+  }
+  if (/(?:google sheets|google slides|clickup|automation targets?|productivity automation)/.test(lower)) {
+    if (checkPlatformMismatch("automation")) return null;
+    return smartRouteArgs("automation", query, SMART_ROUTE_DEFINITIONS.automation);
+  }
+  if (/best\s+(?:online\s+)?course|find\s+.*course|learn\s+.*course/.test(lower)) {
+    if (checkPlatformMismatch("education")) return null;
+    return smartRouteArgs("education", query, SMART_ROUTE_DEFINITIONS.education);
+  }
+  if (/coding help|debug|stackoverflow|stack overflow|mdn|developer docs/.test(lower)) {
+    if (checkPlatformMismatch("dev")) return null;
+    return smartRouteArgs("dev", query, SMART_ROUTE_DEFINITIONS.dev);
+  }
+  if (/react animation libraries|npm package|javascript library|js library|coding library|developer tool|api docs/.test(lower)) {
+    return smartRouteArgs("dev", query, ["google", "github", "npm", "mdn"]);
+  }
+  if (/best laptop|gaming laptop|laptop under|phone under|best phone|headphones under/.test(lower)) {
+    if (checkPlatformMismatch("ecommerce")) return null;
+    return smartRouteArgs("ecommerce", query, SMART_ROUTE_DEFINITIONS.ecommerce);
+  }
+  if (/play\s+.*(?:music|song|lofi|playlist)|relaxing lofi|watch\s+.*(?:video|movie|trailer)|entertainment/.test(lower)) {
+    if (checkPlatformMismatch("media")) return null;
+    return smartRouteArgs("media", query, SMART_ROUTE_DEFINITIONS.media);
+  }
   if (/(?:open|go to|launch)\s+(instagram|x|twitter|linkedin|reddit|discord)\b/.test(lower)) return null;
-  if (/(?:post|message|dm|community|social|microblog|professional network)\b/.test(lower)) return smartRouteArgs("social", query, SMART_ROUTE_DEFINITIONS.social);
-  if (/(?:notes?|docs?|calendar|tasks?|todo|whiteboard|workspace|productivity)\b/.test(lower)) return smartRouteArgs("productivity", query, SMART_ROUTE_DEFINITIONS.productivity);
-  if (/(?:pc games?|epic games?|roblox|minecraft|browser games?|crazygames|steam)\b/.test(lower)) return smartRouteArgs("games", query, SMART_ROUTE_DEFINITIONS.games);
-  if (/^research\b/.test(lower)) return smartRouteArgs("research", query, SMART_ROUTE_DEFINITIONS.research);
+  if (/(?:post|message|dm|community|social|microblog|professional network)\b/.test(lower)) {
+    if (checkPlatformMismatch("social")) return null;
+    return smartRouteArgs("social", query, SMART_ROUTE_DEFINITIONS.social);
+  }
+  if (/(?:notes?|docs?|calendar|tasks?|todo|whiteboard|workspace|productivity)\b/.test(lower)) {
+    if (checkPlatformMismatch("productivity")) return null;
+    return smartRouteArgs("productivity", query, SMART_ROUTE_DEFINITIONS.productivity);
+  }
+  if (/(?:pc games?|epic games?|roblox|minecraft|browser games?|crazygames|steam)\b/.test(lower)) {
+    if (checkPlatformMismatch("games")) return null;
+    return smartRouteArgs("games", query, SMART_ROUTE_DEFINITIONS.games);
+  }
+  if (/^research\b/.test(lower)) {
+    if (checkPlatformMismatch("research")) return null;
+    return smartRouteArgs("research", query, SMART_ROUTE_DEFINITIONS.research);
+  }
   if (/^(?:research|find|compare).*(?:for\s+10\s+minutes|final report|generate a final conclusion|top\s+5|best matches)/.test(lower)) {
     const intent = /laptop|hoodie|under\s+\d|price|buy|shopping/.test(lower) ? "ecommerce" : /job|internship|freelanc/.test(lower) ? "jobs" : "research";
+    if (checkPlatformMismatch(intent)) return null;
     return smartRouteArgs(intent, query, SMART_ROUTE_DEFINITIONS[intent]);
   }
 
@@ -1241,6 +1533,7 @@ async function startAgentLoop(command, options = {}) {
   await updateVoiceState({ mode: "processing", transcript: command, error: null });
   try {
     await rememberSidekickCommand(command, options.source || "text");
+    self.__sidekickLastMemory = await getSidekickMemory();
   } catch (err) {
     // Memory should never block task execution.
   }
@@ -1279,6 +1572,8 @@ async function startAgentLoop(command, options = {}) {
     result: null,
     currentAction: "Initializing agent...",
     askUserQuestion: null,
+    quickReplies: [],
+    pendingWorkflow: null,
     suggestedFollowup: null,
     history: [],
     isFirstStepOfTask: true,
@@ -1293,6 +1588,24 @@ async function startAgentLoop(command, options = {}) {
 // Resume loop with user feedback
 async function resumeAgentWithResponse(response) {
   logAction(`User response: "${response}"`, "info");
+  if (activeState.pendingWorkflow) {
+    const pending = activeState.pendingWorkflow;
+    await applyWorkflowPreference(pending.preferenceKey, response);
+    await updateState({
+      askUserQuestion: null,
+      quickReplies: [],
+      pendingWorkflow: null,
+      isRunning: true,
+      currentAction: "Resuming workflow..."
+    });
+    const result = await executeTool("run_workflow", {
+      ...(pending.continuation || {}),
+      followupResponse: response
+    }).catch((err) => ({ success: false, error: err.message || "Workflow failed" }));
+    if (result?.success) stopAgentLoop(result.data || "Workflow completed.");
+    else stopAgentLoop(result?.error || "Workflow failed.", true);
+    return;
+  }
   
   activeState.history.push({
     role: "user",
@@ -1306,6 +1619,7 @@ async function resumeAgentWithResponse(response) {
 
   await updateState({
     askUserQuestion: null,
+    quickReplies: [],
     isRunning: true,
     currentAction: "Resuming agent loop..."
   });
@@ -1332,7 +1646,19 @@ async function runNextStep() {
       logAction(`Local Router matched action: ${localChoice.tool}`, "success");
       await updateState({ currentAction: `Step ${activeState.currentStep}: Executing ${localChoice.tool}...` });
       try {
+        if (localChoice.tool === "ask_user") {
+          const quickReplies = workflowQuickReplies(localChoice.args.quickReplies || []);
+          await updateVoiceState({ mode: "idle", lastResponse: localChoice.args.question || "Please clarify." });
+          await updateState({
+            isRunning: false,
+            currentAction: "Waiting for user input...",
+            askUserQuestion: localChoice.args.question || "Please clarify.",
+            quickReplies
+          });
+          return;
+        }
         const result = await executeTool(localChoice.tool, localChoice.args);
+        if (result?.askFollowup) return;
         if (localChoice.tool === "summarize_page" && result.success) {
           stopAgentLoop(result.data);
         } else {
@@ -1521,11 +1847,13 @@ Completion: {"tool":"done","args":{"message":"short result"}}.`;
   }
 
   if (choice.tool === "ask_user") {
+    const quickReplies = workflowQuickReplies(choice.args?.quickReplies || choice.args?.buttons || []);
     await updateVoiceState({ mode: "idle", lastResponse: choice.args?.question || "Please clarify." });
     await updateState({
       isRunning: false,
       currentAction: "Waiting for user input...",
-      askUserQuestion: choice.args?.question || "Please clarify."
+      askUserQuestion: choice.args?.question || "Please clarify.",
+      quickReplies
     });
     logAction(`Asked user: "${choice.args?.question}"`, "info");
     return;
@@ -1717,6 +2045,10 @@ function buildSmartRouteUrl(args = {}) {
   return site.url(query);
 }
 
+function workflowSearchQuery(command, slots = {}) {
+  return slots.query || slots.prompt || slots.topic || cleanRouteQuery(command) || command;
+}
+
 // Router of the 65+ browser tools
 async function executeTool(toolName, args = {}) {
   let targetTab = await getTargetTab();
@@ -1794,6 +2126,139 @@ async function executeTool(toolName, args = {}) {
 
   // Execution router
   switch (toolName) {
+    case "run_workflow": {
+      const workflowId = args.workflowId;
+      const command = args.command || activeState.command || "";
+      const slots = args.slots || {};
+      const memory = await getSidekickMemory();
+      const prefs = memory.preferences || {};
+      await saveWorkflowProgress({ workflowId, command, currentStepName: "started" });
+
+      if (args.followupResponse && args.preferenceKey) {
+        await applyWorkflowPreference(args.preferenceKey, args.followupResponse);
+      }
+
+      if (workflowId === "open_website") {
+        if (!slots.url) return { success: false, error: "I could not resolve that website." };
+        const result = await executeTool("new_tab", { url: slots.url });
+        await saveWorkflowProgress({ workflowId, completed: true, visitedSites: [slots.url] });
+        return { success: true, data: result.data || `Opened ${slots.url}` };
+      }
+
+      if (workflowId === "search_web") {
+        const result = await executeTool("google_search", { query: workflowSearchQuery(command, slots) });
+        return { success: true, data: `${result.data}. I can open the first result or show extracted results next.` };
+      }
+
+      if (workflowId === "youtube_search_play") {
+        if (args.followupResponse) {
+          if (/yes|always|fullscreen/i.test(args.followupResponse)) {
+            const fullscreen = await executeTool("youtube_fullscreen", {});
+            return { success: true, data: fullscreen.data || "Fullscreen enabled." };
+          }
+          return { success: true, data: "Okay, keeping the video normal size." };
+        }
+        await executeTool("youtube_search", { query: workflowSearchQuery(command, slots) });
+        await new Promise(r => setTimeout(r, 1200));
+        const tab = await getTargetTab();
+        if (tab?.id) {
+          await ensureContentScriptInTab(tab.id);
+          await delegateToContent("YOUTUBE_OPEN_FIRST", {}, tab.id).catch(() => null);
+        }
+        if (prefs.youtubeFullscreen === "always") {
+          await new Promise(r => setTimeout(r, 1200));
+          await executeTool("youtube_fullscreen", {}).catch(() => null);
+          return { success: true, data: "Playing the first YouTube result in fullscreen." };
+        }
+        if (prefs.youtubeFullscreen !== "never") {
+          return await askWorkflowFollowup({
+            workflowId,
+            question: "Fullscreen it?",
+            buttons: ["Yes", "No", "Don't ask again", "Always fullscreen"],
+            preferenceKey: "youtubeFullscreen",
+            continuation: { workflowId, command, slots, preferenceKey: "youtubeFullscreen" }
+          });
+        }
+        return { success: true, data: "Playing the first YouTube result." };
+      }
+
+      if (workflowId === "youtube_timestamp") {
+        return await executeTool("youtube_seek_to_timestamp", { timestamp: slots.timestamp });
+      }
+
+      if (workflowId === "summarize_page" || workflowId === "explain_page_simply") {
+        const result = await executeTool("summarize_page", {});
+        return { success: true, data: result.data };
+      }
+
+      if (workflowId === "extract_notes") {
+        const result = await executeTool("extract_notes", {});
+        await saveWorkflowProgress({ workflowId, completed: true, extractedData: [result.data] });
+        return result;
+      }
+
+      if (workflowId === "find_best_product" || workflowId === "cheapest_product" || workflowId === "clothing_search") {
+        const query = workflowSearchQuery(command, slots);
+        const chosen = String(args.followupResponse || prefs.preferredMarketplace || "ask").toLowerCase();
+        if (workflowId === "find_best_product" && (!args.followupResponse && (!prefs.preferredMarketplace || prefs.preferredMarketplace === "ask"))) {
+          return await askWorkflowFollowup({
+            workflowId,
+            question: "Prefer Amazon or Flipkart?",
+            buttons: ["Amazon", "Flipkart", "Compare both", "Remember this"],
+            preferenceKey: "preferredMarketplace",
+            continuation: { workflowId, command, slots, preferenceKey: "preferredMarketplace" }
+          });
+        }
+        if (/amazon/.test(chosen)) return await executeTool("amazon_search", { query });
+        if (/flipkart/.test(chosen)) return await executeTool("flipkart_search", { query });
+        const result = await executeTool("multi_tab_research", {
+          query,
+          workflow: "ecommerce",
+          limit: workflowId === "clothing_search" ? 4 : 5
+        });
+        await saveWorkflowProgress({ workflowId, completed: true, extractedData: [result.data] });
+        return result;
+      }
+
+      if (workflowId === "compare_products") return await executeTool("compare_products", { criteria: slots.criteria || "price, specs, rating, reviews" });
+      if (workflowId === "coupon_deal_check") return await executeTool("find_text_on_page", { query: "coupon discount deal offer promo" });
+      if (workflowId === "fill_form_stepwise") return await executeTool("detect_form", {});
+      if (workflowId === "write_email") return await executeTool("write_text", { text: command, target: "email" });
+      if (workflowId === "rewrite_selected_text") return await executeTool("change_tone_selected_text", { tone: /formal/i.test(command) ? "formal" : /short/i.test(command) ? "short" : /simple/i.test(command) ? "simple" : "professional" });
+      if (workflowId === "fix_grammar") return await executeTool("fix_grammar_selected_text", {});
+      if (workflowId === "reply_draft") return await executeTool("write_text", { text: command, target: "reply" });
+      if (workflowId === "research_topic") return await executeTool("multi_tab_research", { query: workflowSearchQuery(command, slots), workflow: "research", limit: 6 });
+      if (workflowId === "coding_research") return await executeTool("multi_tab_research", { query: workflowSearchQuery(command, slots), workflow: "dev", route: ["google", "github", "npm"], limit: 5 });
+      if (workflowId === "github_repo_summary") return await executeTool("summarize_page", {});
+      if (workflowId === "tab_cleanup") return await executeTool("list_tabs", {});
+      if (workflowId === "group_tabs") return await executeTool("list_tabs", {});
+      if (workflowId === "resume_work") return await executeTool("resume_research", {});
+      if (workflowId === "focus_mode") {
+        return await askWorkflowFollowup({
+          workflowId,
+          question: "Focus mode?",
+          buttons: ["Mute distractions", "Pin useful", "Show plan", "Cancel"],
+          preferenceKey: "focusModeAction",
+          continuation: { workflowId, command, slots }
+        });
+      }
+      if (workflowId === "save_page") return await executeTool("save_page_snapshot", {});
+      if (workflowId === "find_in_page") {
+        const text = slots.text || workflowSearchQuery(command, slots);
+        const result = await executeTool("scroll_to_text", { text });
+        await executeTool("highlight_text", { text }).catch(() => null);
+        return result;
+      }
+      if (workflowId === "zoom_readability") {
+        const tool = slots.direction === "out" ? "zoom_out" : slots.direction === "reset" ? "reset_zoom" : "zoom_in";
+        return await executeTool(tool, {});
+      }
+      if (workflowId === "extract_contact_info") return await executeTool("extract_contact_info", {});
+      if (workflowId === "meeting_prep") return await executeTool("multi_tab_research", { query: workflowSearchQuery(command, slots), workflow: "research", limit: 4 });
+
+      return { success: false, error: `Workflow not implemented: ${workflowId}` };
+    }
+
     case "open_url": {
       const invalid = validateLinkArgs(args);
       if (invalid) return invalid;
