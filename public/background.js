@@ -316,7 +316,6 @@ function scheduleNextStep(delay = 800) {
 
 // Load saved state on startup
 chrome.runtime.onInstalled.addListener(async () => {
-  console.log("Sidekick Extension Installed");
   const stored = await chrome.storage.local.get(["agentState", ...Object.keys(SIDEKICK_UI_DEFAULTS)]);
   if (stored.agentState) {
     activeState = stored.agentState;
@@ -1320,12 +1319,12 @@ const INDIA_MARKETPLACE_ROUTES = {
 
 function detectShoppingIntent(command) {
   const lower = String(command || "").toLowerCase();
-  return /(buy|best deal|cheapest|under\s+\d|under\s+₹|price|laptop|shoes|hoodie|t-shirt|clothes|phone|headphones|keyboard|compare products|running shoes|deal)/.test(lower);
+  return /(buy|best deal|cheapest|under\s+\d|under\s+\u20b9|price|laptop|shoes|hoodie|t-shirt|clothes|phone|headphones|keyboard|compare products|running shoes|deal)/.test(lower);
 }
 
 function shouldResearchShoppingIntent(command) {
   const lower = String(command || "").toLowerCase();
-  return /(find|research|compare|best|top|cheap|cheapest|budget|deal|under\s+\d|under\s+₹|value for money|recommend)/.test(lower);
+  return /(find|research|compare|best|top|cheap|cheapest|budget|deal|under\s+\d|under\s+\u20b9|value for money|recommend)/.test(lower);
 }
 
 function inferShoppingCategory(command) {

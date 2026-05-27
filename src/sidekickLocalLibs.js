@@ -16,8 +16,8 @@ function compactText(value, max = 1200) {
 
 function normalizePrice(raw) {
   const text = String(raw || "");
-  const symbol = text.includes("₹") || /\b(?:rs|inr)\b/i.test(text) ? "INR" : text.includes("$") ? "USD" : "";
-  const match = text.match(/(?:₹|\$|rs\.?|inr)?\s*[\d,.]+(?:\.\d{1,2})?/i);
+  const symbol = text.includes("\u20b9") || /\b(?:rs|inr)\b/i.test(text) ? "INR" : text.includes("$") ? "USD" : "";
+  const match = text.match(/(?:\u20b9|\$|rs\.?|inr)?\s*[\d,.]+(?:\.\d{1,2})?/i);
   if (!match) return { raw: text, value: Infinity, currency: symbol };
   const value = currency(match[0].replace(/[^\d.]/g, "") || 0, { precision: 2 }).value;
   return { raw: match[0].trim(), value, currency: symbol };

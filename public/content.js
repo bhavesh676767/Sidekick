@@ -1,7 +1,5 @@
 // Sidekick page runtime: DOM tools + persistent floating notch UI.
 
-console.log("Sidekick content runtime loaded");
-
 if (!window.__sidekickContentRuntimeLoaded) {
   window.__sidekickContentRuntimeLoaded = true;
 
@@ -556,7 +554,7 @@ if (!window.__sidekickContentRuntimeLoaded) {
       const priceEl = card.querySelector(".a-price-whole, .a-price, .price, [class*='price' i], .s-item__price");
       if (priceEl) price = priceEl.innerText.trim().replace(/\n/g, ".");
       else {
-        const match = card.innerText.match(/(?:₹|\$|Rs\.?|INR)\s*[\d,.]+(?:\.\d{1,2})?/i);
+        const match = card.innerText.match(/(?:\u20b9|\$|Rs\.?|INR)\s*[\d,.]+(?:\.\d{1,2})?/i);
         if (match) price = match[0];
       }
       if (!price) continue;
@@ -1367,7 +1365,7 @@ if (!window.__sidekickContentRuntimeLoaded) {
             <div class="sk-notch-response">${responseText || "Ready."}</div>
             <div class="sk-notch-input-row sk-notch-input-row-text">
               <input class="sk-notch-input" data-sk-input="command" placeholder="${agentState.askUserQuestion ? "Answer Sidekick..." : "Ask Sidekick..."}" />
-              <button class="sk-notch-btn sk-notch-btn-primary" data-sk-action="send" aria-label="Send command">→</button>
+              <button class="sk-notch-btn sk-notch-btn-primary" data-sk-action="send" aria-label="Send command">Send</button>
             </div>
             <div class="sk-notch-footer">
               <div class="sk-notch-mini">Prompt mode</div>

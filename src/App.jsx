@@ -1,9 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Check,
-  ChevronRight,
   Cpu,
-  Eye,
   EyeOff,
   Loader2,
   Moon,
@@ -15,7 +13,6 @@ import {
   Square
 } from "lucide-react";
 
-import SidekickNotch from "./notch/SidekickNotch";
 import { MascotPlaceholder, Doodle } from "./components/Illustrations";
 
 const chromeApi = (typeof chrome !== "undefined" && chrome?.runtime?.sendMessage && chrome?.storage?.local) ? chrome : {
@@ -129,7 +126,7 @@ function KeyCard({ theme, label, value, saved, onChange, onSave, onDelete, place
       </div>
       {saved ? (
         <div className="flex items-center gap-2">
-          <div className={`flex-1 sketch-border-sm px-3 py-1.5 text-[10px] tracking-[0.2em] ${t.input}`}>••••••••••••••••</div>
+          <div className={`flex-1 sketch-border-sm px-3 py-1.5 text-[10px] tracking-[0.2em] ${t.input}`}>****************</div>
           <button onClick={onDelete} className={`sketch-border-sm px-3 py-1.5 text-[10px] font-black transition sketch-shadow-sm ${t.ghost}`}>
             Remove
           </button>
@@ -197,7 +194,6 @@ export default function App() {
   const t = THEME[theme];
   const hasApiKey = providerPriority.some((provider) => apiKeys[provider] && testedKeys[provider]);
   const aiReady = aiMode === "ollama" ? Boolean(ollamaStatus?.connected) : hasApiKey;
-  const isWindowsDesktop = typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent) && !/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
 
   useEffect(() => {
     async function load() {
@@ -256,12 +252,6 @@ export default function App() {
     chromeApi.runtime.onMessage.addListener(listener);
     return () => chromeApi.runtime.onMessage.removeListener(listener);
   }, []);
-
-  const previewState = useMemo(() => {
-    if (voiceState?.error) return "error";
-    if (agentState?.isRunning) return "processing";
-    return "idle";
-  }, [agentState?.isRunning, voiceState?.error]);
 
   // Theme selection is handled by the firstRun overlay below (line ~483)
 
@@ -368,12 +358,12 @@ export default function App() {
   const bubbleText = useMemo(() => {
     if (!aiReady) return "Wait, my brain is unplugged! Please click below to connect an AI key or Ollama in settings so I can browse with you!";
     if (agentState.isRunning) {
-      if (agentState.currentAction.toLowerCase().includes("reasoning")) return "Thinking hard about what to do next... 🤔";
-      if (agentState.currentAction.toLowerCase().includes("executing")) return `Working on: ${agentState.currentAction.replace(/Step \d+: Executing /g, "")}! 🚀`;
+      if (agentState.currentAction.toLowerCase().includes("reasoning")) return "Thinking through the next move...";
+      if (agentState.currentAction.toLowerCase().includes("executing")) return `Working on: ${agentState.currentAction.replace(/Step \d+: Executing /g, "")}!`;
       return `${agentState.currentAction}`;
     }
-    if (sidekickActive) return "Yay! I am live on your browser page. Type a command in the box below and watch me work! 📝";
-    return "Hey Bhavesh! I am ready to be your browser buddy. Launch me or type a task below to start pair browsing! 🎈";
+    if (sidekickActive) return "Yay, I am live on your browser page. Type a command below and watch me work.";
+    return "Hey Bhavesh! I am ready to be your browser buddy. Launch me or type a task below to start pair browsing.";
   }, [aiReady, agentState.isRunning, agentState.currentAction, sidekickActive]);
 
   // Show Preloader if booting, launching or hiding
@@ -485,7 +475,7 @@ export default function App() {
           <ThemeButton theme={theme} active={theme === "dark"} icon={Moon} title="Matte dark" body="Warm charcoal." onClick={() => setTheme("dark")} />
         </div>
         <button onClick={() => saveTheme(theme, true)} className={`mt-auto inline-flex items-center justify-center gap-2 sketch-border px-4 py-2.5 text-sm font-black sketch-shadow ${t.primary}`}>
-          Start Sidekick Buddy! ➔
+          Start Sidekick Buddy
         </button>
       </div>
     </div>
@@ -535,14 +525,14 @@ export default function App() {
         {!aiReady && (
           <div className="sketch-border p-3 bg-[#ffe5ec] dark:bg-[#3d0814] text-[#80061e] dark:text-[#ffccd5] text-xs leading-relaxed sketch-shadow flex flex-col gap-1.5 animate-slide-up">
             <span className="font-black flex items-center gap-1.5 text-xs uppercase tracking-wider">
-              ⚠️ offline buddy (no brain)
+              Offline buddy, no brain connected
             </span>
-            <p className="font-semibold">I have no active AI model key configured! Please connect an API key or local Ollama server in settings so I can reasoning and browse for you.</p>
+            <p className="font-semibold">I have no active AI model key configured. Connect an API key or local Ollama server in settings so I can reason and browse for you.</p>
             <button 
               onClick={() => setShowSettings(true)} 
               className={`sketch-border-sm px-2.5 py-1 text-center font-black bg-[#80061e] dark:bg-[#ffccd5] text-[#ffe5ec] dark:text-[#3d0814] self-start text-[10px] tracking-wide mt-1 sketch-shadow-sm hover:translate-y-0.5`}
             >
-              Add API Key / Connect Ollama ➔
+              Add API Key / Connect Ollama
             </button>
           </div>
         )}
@@ -600,7 +590,7 @@ export default function App() {
                   className={`sketch-border-sm sketch-shadow-sm px-4 py-1.5 flex items-center gap-1.5 font-black text-xs transition ${promptInput.trim() && aiReady && !agentState.isRunning ? t.primary : 'opacity-40 cursor-not-allowed'}`}
                 >
                   <Play className="h-3 w-3 fill-current" />
-                  Go! 🚀
+                  Go
                 </button>
               </div>
             </div>

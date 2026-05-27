@@ -1,218 +1,180 @@
-# Sidekick - AI Voice Assistant Browser Extension
+# Sidekick
 
-A premium, minimal black-and-white browser extension UI for an AI voice assistant that can understand webpages, open websites, search, click buttons, fill forms, summarize content, manage tabs, and execute browser tasks through natural conversation.
+Sidekick is a Chromium browser extension that puts an AI command notch on the page you are using. Ask it to summarize, search, compare, fill, write, scroll, click, or open things, and it turns that request into browser actions.
 
-## Features
+It is built for people who want the browser to feel less like chore mode and more like "cool, handle this for me."
 
-- 🎙️ **Voice-controlled interface** - Hands-free browsing with natural language
-- 📋 **Quick actions** - Summarize, search, open websites, fill forms, click buttons, manage tabs
-- ✨ **Premium minimalist design** - Black and white with soft rounded corners
-- 🎨 **Hand-drawn mascot** - Friendly assistant character
-- ⚙️ **Customizable settings** - Toggle voice input, auto-context reading, safety confirmations
-- 🚀 **Production-ready** - Built with React and Tailwind CSS
+## Status
+
+Sidekick is installable as an unpacked Chromium extension. It is not packaged for the Chrome Web Store yet.
+
+## What It Does
+
+- Opens a clean extension popup for setup, model selection, and task control.
+- Injects a persistent floating notch into normal webpages.
+- Reads page context, visible controls, links, form fields, products, headings, tables, and readable article text.
+- Runs browser actions like opening sites, clicking links/buttons, typing into fields, scrolling, searching, and extracting content.
+- Supports cloud provider fallback order for Gemini, OpenRouter, Groq, OpenAI, and Claude.
+- Supports local Ollama through `http://127.0.0.1:11434`.
+- Stores API keys and learned preferences in `chrome.storage.local`.
+- Includes workflow packs for shopping, YouTube, research, writing, productivity, and forms.
+
+## Tech Stack
+
+- React 18
+- Vite
+- Tailwind CSS
+- Chrome Extension Manifest V3
+- Local helper bundle with Fuse, Readability, chrono-node, compromise, MiniSearch, localForage, linkify, currency.js, and Tesseract.js
 
 ## Project Structure
 
-```
-sidekick/
-├── src/
-│   ├── components/          # Reusable UI components
-│   │   ├── Button.jsx       # Primary, secondary, ghost buttons
-│   │   ├── Card.jsx         # Card and quick action cards
-│   │   ├── Input.jsx        # Text inputs and voice input
-│   │   ├── Status.jsx       # Status indicators, badges, progress
-│   │   ├── Illustrations.jsx # Mascot, doodles, animations
-│   │   └── index.js         # Barrel export
-│   ├── screens/             # Full-screen views
-│   │   ├── OnboardingScreen.jsx    # Welcome screen
-│   │   ├── MainPopupScreen.jsx     # Main assistant interface
-│   │   ├── ListeningScreen.jsx     # Active listening state
-│   │   ├── TaskExecutionScreen.jsx # Task progress view
-│   │   ├── SettingsScreen.jsx      # Configuration panel
-│   │   └── index.js                # Barrel export
-│   ├── styles/
-│   │   └── index.css        # Global styles & Tailwind
-│   ├── App.jsx              # Main app with state management
-│   ├── main.jsx             # React DOM entry
-│   ├── background.js        # Chrome extension background
-│   └── content.js           # Content script for webpages
-├── public/
-│   └── manifest.json        # Chrome extension manifest
-├── index.html               # HTML entry point
-├── package.json
-├── tailwind.config.js
-├── postcss.config.js
-└── vite.config.js
+```text
+Sidekick/
+  public/
+    background.js              Extension service worker and agent loop
+    content.js                 Page runtime, DOM tools, and floating notch
+    followupEngine.js          Follow-up prompts and reply parsing
+    memoryManager.js           Local memory and preference helpers
+    manifest.json              MV3 extension manifest
+    sidekick_logo.png          Extension icon
+    vendor/                    Built local helper libraries and OCR runtime
+    workflows/                 Domain workflow packs
+  src/
+    App.jsx                    Popup UI
+    main.jsx                   React entry
+    sidekickLocalLibs.js       Source for the bundled helper runtime
+    components/Illustrations.jsx
+    styles/index.css
+  index.html
+  package.json
+  vite.config.js
+  vite.sidekick-libs.config.js
 ```
 
-## Components
+## Setup
 
-### UI Components
-- **Button** - Primary, secondary, ghost, and outline variants
-- **IconButton** - Icon-only button component
-- **Card** - Reusable card with optional hover effects
-- **Input/VoiceInput** - Text input and voice command field
-- **StatusDot** - Animated status indicator
-- **Badge** - Label badges with variants
-- **ProgressStep** - Step indicators for task execution
-- **Divider** - Separator line
+Requirements:
 
-### Illustrations
-- **MascotPlaceholder** - Cute hand-drawn assistant character
-- **Doodle** - Decorative doodle elements (dots, waves, arrows)
-- **ListeningAnimation** - Animated sound wave bars
-- **MicPulseRing** - Animated microphone pulse ring
+- Node.js 20.19 or newer
+- npm
+- Chrome, Brave, Edge, or another Chromium browser
 
-### Screens
-1. **Onboarding** - Welcome with mascot and call-to-action
-2. **Main Popup** - Quick actions grid, voice input, greeting
-3. **Listening** - Animated mic with transcript display
-4. **Task Execution** - Step-by-step progress and results
-5. **Settings** - Toggle preferences and API status
-
-## Design System
-
-### Colors
-- **Primary**: Pure black (#000000)
-- **Background**: White (#FFFFFF)
-- **Grays**: 50-900 scale for depth
-
-### Typography
-- **Font**: System font stack (-apple-system, BlinkMacSystemFont, Segoe UI, Roboto)
-- **Weights**: Light, normal, medium, semibold, bold
-- **Sizes**: 12px - 40px with proper line-height
-
-### Spacing & Corners
-- **Border Radius**: 24px (default), 12-32px variants
-- **Shadows**: Soft shadows (0.05 - 0.12 opacity)
-- **Spacing**: 4px grid system
-
-### Animations
-- **Pulse animations** for listening state
-- **Slide-in** for new content
-- **Smooth transitions** for interactions
-- **Scale transforms** for button feedback
-
-## Setup & Development
-
-### Prerequisites
-- Node.js 16+
-- npm or yarn
-
-### Installation
+Install dependencies:
 
 ```bash
-# Install dependencies
 npm install
+```
 
-# Start development server
-npm run dev
+Build the extension:
 
-# Build for production
+```bash
 npm run build
 ```
 
-### Chrome Extension Setup
+Load it in the browser:
 
-1. Build the project: `npm run build`
-2. Go to `chrome://extensions/`
-3. Enable "Developer mode"
-4. Click "Load unpacked"
-5. Select the `dist` folder
+1. Open `chrome://extensions`.
+2. Turn on Developer mode.
+3. Click `Load unpacked`.
+4. Select the `dist` folder.
 
-## Features Breakdown
+For local popup development:
 
-### Onboarding Screen
-- Logo: "Sidekick"
-- Heading: "Control the web with your voice."
-- Subheading: Explanation of capabilities
-- Mascot illustration
-- Call-to-action button
+```bash
+npm run dev
+```
 
-### Main Popup
-- Header with logo, status indicator, settings
-- Personalized greeting (e.g., "Hey Bhavesh,")
-- Voice command input with mic button
-- 6 quick action cards:
-  - Summarize page
-  - Open website
-  - Fill form
-  - Search web
-  - Click button
-  - Manage tabs
-- Footer showing API status
+For a production preview:
 
-### Listening State
-- Large animated mic pulse ring
-- Live transcript display
-- Listening/Processing status
-- Stop button
+```bash
+npm run preview
+```
 
-### Task Execution
-- Current task title
-- Step-by-step progress indicators
-- Visual progression through steps
-- Result display on completion
-- Action buttons (New Command, Close)
+## Scripts
 
-### Settings
-- Voice input toggle
-- Auto-read page context toggle
-- Confirm risky actions toggle
-- Gemini API status
-- Speech API status
-- Version & support info
+```text
+npm run dev          Start the Vite dev server for the popup UI.
+npm run build:libs   Rebuild the local helper bundle in public/vendor.
+npm run build        Rebuild helper libs, then build the extension into dist.
+npm run preview      Preview the built popup.
+npm run typecheck    Run TypeScript checks over JS/JSX project files.
+```
 
-## State Management
+## AI Setup
 
-The app uses React hooks for simple state management:
-- `currentScreen` - Active screen enum
-- `micActive` - Microphone state
-- `assistantStatus` - idle, listening, active
-- `settings` - User preferences
-- `executionSteps` - Task progress
+Sidekick can use cloud providers or a local Ollama server.
 
-## Mocked Features
+Cloud mode:
 
-All assistant responses and task execution are mocked to allow for UI testing:
-- Voice transcripts randomly selected from predefined list
-- Task execution simulates step progression
-- Results are static example text
-- API statuses are hardcoded
+1. Open the extension popup.
+2. Go to Settings.
+3. Choose provider order.
+4. Add at least one API key.
+5. Save and launch the notch.
 
-## Styling
+Local mode:
 
-Uses **Tailwind CSS** for utility-first styling with custom configuration:
-- Custom color palette (black, white, grays)
-- Extended spacing and border-radius
-- Soft box-shadow values
-- Custom animations (pulse-soft, mic-pulse, slide-in)
-- Typography scale optimized for UI
+1. Install Ollama.
+2. Pull a model, for example `ollama pull qwen2.5:3b`.
+3. Keep Ollama running at `http://127.0.0.1:11434`.
+4. Select Local Ollama in Settings.
 
-## Browser Compatibility
+## Permissions
 
-- Chrome 90+
-- Edge 90+
-- Brave 1.20+
-- Other Chromium-based browsers
+Sidekick asks for broad extension permissions because browser automation is the whole point. The important ones:
 
-## Future Enhancements
+- `tabs` and `activeTab`: find and control the current browser tab.
+- `scripting`: inject the content runtime when needed.
+- `storage`: keep settings, keys, tasks, and local memory.
+- `clipboardRead` and `clipboardWrite`: support copy/paste browser tasks.
+- `<all_urls>`: let the notch and DOM tools work across normal websites.
 
-- [ ] Real Gemini API integration
-- [ ] Web Speech API integration
-- [ ] Real DOM manipulation and form filling
-- [ ] Tab management functionality
-- [ ] Page summarization logic
-- [ ] User authentication
-- [ ] Cloud sync for settings
-- [ ] Custom voice profiles
-- [ ] Keyboard shortcuts
-- [ ] Dark mode support
+This is powerful access, so keep the extension loaded only from code you trust.
+
+## Privacy
+
+Short version: no hidden analytics, no project-owned backend, no random telemetry.
+
+Sidekick stores settings and keys locally through Chrome storage. When you ask Sidekick to use an AI provider, relevant task context may be sent to the provider you configured. If you use Ollama, requests go to your local Ollama server.
+
+Read [PRIVACY.md](PRIVACY.md) for the fuller version.
+
+## Release Checklist
+
+Before shipping a build:
+
+1. Run `npm ci`.
+2. Run `npm run typecheck`.
+3. Run `npm run build`.
+4. Load `dist` as an unpacked extension.
+5. Check popup boot, settings, API key save/delete, Ollama check, notch launch/hide, and one simple browser action.
+6. Confirm no secret keys or generated local folders are staged.
+
+## Troubleshooting
+
+Blank popup:
+
+- Re-run `npm run build`.
+- Reload the extension in `chrome://extensions`.
+- Make sure the loaded folder is `dist`, not the repo root.
+
+Notch will not launch:
+
+- Use a normal webpage. Chrome pages like `chrome://extensions` cannot be injected.
+- Refresh the tab after installing or rebuilding the extension.
+- Check that at least one provider is configured, or select Local Ollama and verify connection.
+
+Ollama is offline:
+
+- Start Ollama.
+- Open `http://127.0.0.1:11434/api/tags` in a browser to confirm the server responds.
+- Make sure the model name in Settings matches an installed model.
+
+## Contributing
+
+Pull requests are welcome. Keep the vibe clean, practical, and low-drama. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-MIT
-
-## Author
-
-Built with ❤️ for the Sidekick project
+MIT. See [LICENSE](LICENSE).

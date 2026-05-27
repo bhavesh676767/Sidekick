@@ -7,9 +7,10 @@
     "checkJs": false,
     "jsx": "react-jsx",
     "module": "ESNext",
-    "moduleResolution": "Node",
+    "moduleResolution": "Bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
+    "skipLibCheck": true,
     "noEmit": true
   },
   "include": ["src", "vite.config.js"]

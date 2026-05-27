@@ -1,7 +1,15 @@
 node_modules/
 dist/
+public/vendor/sidekick-local-libs.js
+.qodo/
+.vite/
+coverage/
+playwright-report/
+test-results/
 .env
 .env.local
+.env.*
+.env.example
 .DS_Store
 *.log
 npm-debug.log*
