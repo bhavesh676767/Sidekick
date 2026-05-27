@@ -1,3 +1,9 @@
+
+
+https://github.com/user-attachments/assets/35af8a53-6925-4e55-a056-adfc388d769d
+
+
+
 # Contributing
 
 Thanks for helping make Sidekick better. Keep changes focused, readable, and easy to review.
