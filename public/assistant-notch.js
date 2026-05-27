@@ -12,7 +12,7 @@
     PANEL_WIDTH: 320,
     PANEL_HEIGHT: 420,
     ANIMATION_DURATION: 200,
-    OLLAMA_URL: 'http://localhost:11434/api/chat',
+    OLLAMA_URL: 'http://127.0.0.1:11434/api/chat',
     DEFAULT_MODEL: 'llama3.2:1b'
   };
 
@@ -434,102 +434,76 @@
     isTyping = true;
 
     // Show typing indicator
-    typingIndicatorEl.style.display = 'flex';
-    messagesContainerEl.scrollTop = messagesContainerEl.scrollHeight;
+    typingIndicatorEl.style.display = '';
 
     try {
-      const response = await fetch(CONFIG.OLLAMA_URL, {
+      const resp = await fetch(CONFIG.OLLAMA_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: CONFIG.DEFAULT_MODEL,
           messages: [
-            {
-              role: 'system',
-              content: 'You are a lightweight browser assistant. Be short, natural, and helpful.'
-            },
-            ...chatHistory,
             { role: 'user', content: message }
           ],
           stream: false
         }),
-        signal: AbortSignal.timeout(60000)
+        signal: AbortSignal.timeout ? AbortSignal.timeout(30000) : undefined
       });
 
-      if (!response.ok) {
-        if (response.status === 404) {
-          addMessage(`Model not found. Run: ollama run ${CONFIG.DEFAULT_MODEL}`, 'error');
-        } else {
-          addMessage('Failed to get response from Ollama. Is it running?', 'error');
-        }
+      if (!resp.ok) {
+        addMessage('Failed to get response from local AI.', 'error');
       } else {
-        const data = await response.json();
-        const assistantMessage = data.message?.content || 'No response received.';
-        addMessage(assistantMessage, 'assistant');
-        
-        // Update chat history
-        chatHistory.push({ role: 'user', content: message });
-        chatHistory.push({ role: 'assistant', content: assistantMessage });
-        
-        // Keep history manageable
-        if (chatHistory.length > 10) {
-          chatHistory = chatHistory.slice(-10);
+        const data = await resp.json();
+        const assistantText = data.message?.content || data.response || '';
+        if (assistantText) {
+          addMessage(assistantText, 'assistant');
+        } else {
+          addMessage('No response from assistant.', 'error');
         }
       }
     } catch (err) {
-      if (err.name === 'TimeoutError') {
-        addMessage('Request timed out. Try a shorter message.', 'error');
-      } else {
-        addMessage('Could not connect to Ollama. Is it running? Open Ollama and try again.', 'error');
-      }
+      addMessage('Error communicating with local AI.', 'error');
     } finally {
       isTyping = false;
       typingIndicatorEl.style.display = 'none';
-      messagesContainerEl.scrollTop = messagesContainerEl.scrollHeight;
     }
   }
 
-  // Add message to chat
+  // Add message to UI
   function addMessage(text, type) {
-    const msgEl = document.createElement('div');
-    msgEl.className = `sk-message sk-${type}`;
-    msgEl.textContent = text;
-    messagesContainerEl.appendChild(msgEl);
+    const el = document.createElement('div');
+    el.className = `sk-message sk-${type}`;
+    el.textContent = text;
+    messagesContainerEl.appendChild(el);
     messagesContainerEl.scrollTop = messagesContainerEl.scrollHeight;
   }
 
-  // Remove notch
+  // Remove the notch from the page
   function removeNotch() {
-    // Notify background script
-    chrome.runtime.sendMessage({ action: 'NOTCH_REMOVED' });
-    
-    // Animate removal
-    notchEl.style.transition = 'transform 0.3s ease, opacity 0.3s ease';
-    notchEl.style.transform = 'scale(0.8)';
-    notchEl.style.opacity = '0';
-    
-    setTimeout(() => {
+    try {
       notchEl.remove();
-    }, 300);
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (message?.action === 'REMOVE_NOTCH') {
+        removeNotch();
+        sendResponse({ success: true });
+      }
+      return true;
+    });
   }
 
   // Initialize
-  createNotch();
-
-  // Listen for messages from popup/background
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.action === 'TOGGLE_NOTCH') {
-      togglePanel();
-      sendResponse({ success: true });
-    } else if (message.action === 'REMOVE_NOTCH') {
-      removeNotch();
-      sendResponse({ success: true });
-    } else if (message.action === 'SEND_MESSAGE') {
-      inputEl.value = message.text;
-      sendMessage();
-      sendResponse({ success: true });
-    }
-    return true;
-  });
+  try {
+    createNotch();
+  } catch (e) {
+    console.warn('assistant-notch init failed', e);
+  }
 
 })();
+
+

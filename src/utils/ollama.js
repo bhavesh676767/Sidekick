@@ -1,32 +1,28 @@
-// Ollama Local AI Integration Utilities
-// Handles connection checking, model management, and chat API
+// Ollama Local AI Integration Utilities (popup-side wrappers)
+// All network calls to Ollama are delegated to the background service worker
+// to avoid CORS/permission issues. Use chrome.runtime.sendMessage.
 
-const OLLAMA_BASE_URL = 'http://localhost:11434';
 export const DEFAULT_MODEL = 'llama3.2:1b';
 const RECOMMENDED_MODEL = 'llama3.2:1b';
 
 /**
- * Check if Ollama is running and accessible
- * @returns {Promise<{connected: boolean, error?: string}>}
+ * Check if Ollama is running and accessible (via background.js)
+ * @returns {Promise<{connected: boolean, models?: Array, error?: string}>}
  */
 export async function checkOllamaConnection() {
-  try {
-    const response = await fetch(`${OLLAMA_BASE_URL}/api/tags`, {
-      method: 'GET',
-      signal: AbortSignal.timeout(5000) // 5 second timeout
-    });
-    
-    if (response.ok) {
-      const data = await response.json();
-      return { connected: true, models: data.models || [] };
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage({ action: 'CHECK_OLLAMA' }, (resp) => {
+        if (chrome.runtime.lastError) {
+          resolve({ connected: false, error: 'Could not contact background service' });
+        } else {
+          resolve(resp || { connected: false, error: 'No response' });
+        }
+      });
+    } catch (err) {
+      resolve({ connected: false, error: err?.message || 'Failed to check Ollama' });
     }
-    return { connected: false, error: 'Ollama responded with an error' };
-  } catch (err) {
-    if (err.name === 'TimeoutError') {
-      return { connected: false, error: 'Connection timed out. Is Ollama running?' };
-    }
-    return { connected: false, error: 'Could not connect to Ollama. Make sure it\'s installed and running.' };
-  }
+  });
 }
 
 /**
@@ -59,53 +55,26 @@ export async function checkModelInstalled(modelName = DEFAULT_MODEL) {
  * @param {Function} onStream - Optional streaming callback
  * @returns {Promise<{response: string, error?: string}>}
  */
-export async function askLocalAI(message, model = DEFAULT_MODEL, onStream = null) {
-  try {
-    const response = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: model,
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a lightweight browser assistant. Be short, natural, and helpful. Keep responses concise.'
-          },
-          {
-            role: 'user',
-            content: message
-          }
-        ],
-        stream: false
-      }),
-      signal: AbortSignal.timeout(60000) // 60 second timeout for response
-    });
-    
-    if (!response.ok) {
-      const errorText = await response.text();
-      
-      if (response.status === 404) {
-        return { 
-          response: '', 
-          error: `Model "${model}" not found. Run: ollama run ${model}` 
-        };
-      }
-      
-      return { response: '', error: `Ollama error: ${errorText}` };
+/**
+ * Ask the local Ollama model (delegated to background)
+ * @param {string} message
+ * @param {string} model
+ * @returns {Promise<{response?:string, error?:string}>}
+ */
+export async function askLocalAI(message, model = DEFAULT_MODEL) {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage({ action: 'OLLAMA_CHAT', model, message }, (resp) => {
+        if (chrome.runtime.lastError) {
+          resolve({ response: '', error: 'Failed to contact background service' });
+        } else {
+          resolve(resp || { response: '', error: 'No response from background' });
+        }
+      });
+    } catch (err) {
+      resolve({ response: '', error: err?.message || 'Failed to ask Local AI' });
     }
-    
-    const data = await response.json();
-    const assistantMessage = data.message?.content || '';
-    
-    return { response: assistantMessage };
-  } catch (err) {
-    if (err.name === 'TimeoutError') {
-      return { response: '', error: 'Request timed out. Try a shorter message.' };
-    }
-    return { response: '', error: 'Failed to connect to Ollama. Is it running?' };
-  }
+  });
 }
 
 /**
@@ -226,4 +195,78 @@ export async function setLocalAIEnabled(enabled) {
 export async function isLocalAIEnabled() {
   const state = await loadSetupState();
   return state.useLocalAI === true;
+}
+
+/**
+ * Detect Ollama installation and readiness state
+ * Returns one of: 'not_installed', 'installed_stopped', 'running_no_models', 'ready'
+ */
+export async function detectOllamaState(recommendedModel = DEFAULT_MODEL) {
+  try {
+    const res = await checkOllamaConnection();
+    if (!res.connected) {
+      return { state: 'not_installed', info: res.error || null };
+    }
+    const models = res.models || [];
+    if (!models || models.length === 0) {
+      return { state: 'running_no_models', models: [] };
+    }
+    const hasRecommended = models.some(m => m.name === recommendedModel || m.name.startsWith(`${recommendedModel}:`));
+    return { state: 'ready', models, hasRecommended };
+  } catch (err) {
+    return { state: 'not_installed', info: err?.message || null };
+  }
+}
+
+/**
+ * Trigger model pull on Ollama: POST /api/pull { name }
+ * Returns immediately and then callers should poll checkModelInstalled to detect completion.
+ */
+export async function pullModel(modelName) {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage({ action: 'OLLAMA_PULL', model: modelName }, (resp) => {
+        if (chrome.runtime.lastError) {
+          resolve({ ok: false, error: chrome.runtime.lastError.message });
+        } else {
+          resolve(resp || { ok: false, error: 'No response from background' });
+        }
+      });
+    } catch (err) {
+      resolve({ ok: false, error: err?.message || 'Failed to request model pull' });
+    }
+  });
+}
+
+/**
+ * Friendly error mapping for user-facing messages
+ */
+export function mapOllamaError(err) {
+  if (!err) return 'An unknown error occurred.';
+  const msg = (err.message || err || '').toLowerCase();
+  if (msg.includes('403')) return 'Sidekick cannot connect to Local AI.';
+  if (msg.includes('failed') || msg.includes('could not connect')) return 'Local AI is not running.';
+  if (msg.includes('timeout')) return 'AI is taking too long to respond.';
+  return 'There was a problem connecting to the Local AI.';
+}
+
+// Returns structured error details: { message, code, fix }
+export function mapOllamaErrorDetails(err) {
+  if (!err) return { message: 'An unknown error occurred.', code: 'unknown', fix: null };
+  const raw = (err.message || err || '').toLowerCase();
+  if (raw.includes('403')) {
+    return {
+      message: 'Sidekick is blocked from using Local AI (permission issue).',
+      code: 'blocked',
+      fix: 'Check your Local AI app settings or allow access from Sidekick. If using Ollama, ensure origins are permissive.'
+    };
+  }
+  if (raw.includes('could not contact') || raw.includes('could not connect') || raw.includes('failed to connect')) {
+    return { message: 'Local AI is not running.', code: 'connection', fix: 'Start the Local AI app (Ollama) on your computer, then retry.' };
+  }
+  if (raw.includes('timeout')) {
+    return { message: 'Local AI is taking too long to respond.', code: 'timeout', fix: 'Check your network and try again. If slow, wait a few moments and retry.' };
+  }
+  // fallback
+  return { message: 'There was a problem connecting to the Local AI.', code: 'error', fix: null };
 }

@@ -1,0 +1,61 @@
+.sidekick-notch-preview {
+  position: relative;
+  width: 100%;
+  min-height: 176px;
+  overflow: hidden;
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.12), transparent 36%),
+    linear-gradient(180deg, #111111 0%, #050505 100%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 22px 50px rgba(0, 0, 0, 0.42);
+}
+
+.sidekick-notch-preview::after {
+  content: "";
+  position: absolute;
+  inset: auto 14px 14px auto;
+  width: 58px;
+  height: 58px;
+  border-radius: 999px;
+  background: #050505;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 16px 28px rgba(0, 0, 0, 0.35);
+}
+
+.sidekick-notch-chip {
+  position: absolute;
+  right: 19px;
+  bottom: 19px;
+  z-index: 1;
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  color: #ffffff;
+}
+
+.sidekick-notch-wave {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 18px;
+}
+
+.sidekick-notch-wave span {
+  width: 3px;
+  border-radius: 999px;
+  background: #ffffff;
+  animation: sidekick-notch-wave 0.9s ease-in-out infinite;
+}
+
+.sidekick-notch-wave span:nth-child(1) { height: 8px; }
+.sidekick-notch-wave span:nth-child(2) { height: 14px; animation-delay: 0.12s; }
+.sidekick-notch-wave span:nth-child(3) { height: 10px; animation-delay: 0.24s; }
+.sidekick-notch-wave span:nth-child(4) { height: 16px; animation-delay: 0.36s; }
+
+@keyframes sidekick-notch-wave {
+  0%, 100% { opacity: 0.4; transform: scaleY(0.7); }
+  50% { opacity: 1; transform: scaleY(1.08); }
+}
