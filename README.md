@@ -4,6 +4,8 @@ Sidekick is a Chromium browser extension that puts an AI command notch on the pa
 
 It is built for people who want the browser to feel less like chore mode and more like "cool, handle this for me."
 
+This project was built and programmed primarily by me. I used AI tools such as Devin AI and Claude Code only for basic assistance, including small workflow suggestions, README wording, debugging guidance, and routine cleanup. The main product idea, browser-extension logic, implementation decisions, and core programming work were done by me.
+
 ## Status
 
 Sidekick is installable as an unpacked Chromium extension. It is not packaged for the Chrome Web Store yet.
