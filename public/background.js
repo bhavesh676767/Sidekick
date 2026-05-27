@@ -1,5 +1,5 @@
 try {
-  importScripts("memoryManager.js", "followupEngine.js");
+  importScripts("vendor/sidekick-local-libs.js", "memoryManager.js", "followupEngine.js");
 } catch (err) {
   console.warn("Sidekick modular helpers unavailable", err);
 }
@@ -21,12 +21,13 @@ const SIDEKICK_UI_DEFAULTS = {
   sidekickEnabled: false,
   notchPosition: { x: null, y: null },
   notchCollapsed: true,
-  voiceEnabled: true,
-  voiceMode: "manual",
+  voiceEnabled: false,
+  voiceMode: "text",
   wakeWord: "sidekick",
-  autoSpeak: true,
+  autoSpeak: false,
   speechRate: 1,
-  lastState: "idle"
+  lastState: "idle",
+  sidekickTheme: "light"
 };
 
 // Get current provider configuration
@@ -60,6 +61,28 @@ let activeState = {
 };
 
 let pageCache = {};
+
+async function saveLocalMemory(key, value) {
+  try {
+    if (self.SidekickLibs?.saveMemory) {
+      await self.SidekickLibs.saveMemory(key, value);
+    }
+  } catch (err) {
+    console.warn("Sidekick localForage save failed", err);
+  }
+  return value;
+}
+
+async function getLocalMemory(key) {
+  try {
+    if (self.SidekickLibs?.getMemory) {
+      return await self.SidekickLibs.getMemory(key);
+    }
+  } catch (err) {
+    console.warn("Sidekick localForage read failed", err);
+  }
+  return null;
+}
 
 let voiceState = {
   mode: "idle",
@@ -100,7 +123,8 @@ async function getSidekickUiState() {
     wakeWord: stored.wakeWord || SIDEKICK_UI_DEFAULTS.wakeWord,
     autoSpeak: stored.autoSpeak ?? SIDEKICK_UI_DEFAULTS.autoSpeak,
     speechRate: stored.speechRate || SIDEKICK_UI_DEFAULTS.speechRate,
-    lastState: stored.lastState || SIDEKICK_UI_DEFAULTS.lastState
+    lastState: stored.lastState || SIDEKICK_UI_DEFAULTS.lastState,
+    sidekickTheme: stored.sidekickTheme || SIDEKICK_UI_DEFAULTS.sidekickTheme
   };
 }
 
@@ -167,6 +191,8 @@ async function updateState(newState) {
       }
       const trimmed = tasks.slice(0, 50);
       await chrome.storage.local.set({ tasks: trimmed });
+      await saveLocalMemory("sidekick:tasks", trimmed);
+      await saveLocalMemory(`sidekick:task:${activeState.taskId}`, snapshot);
     }
   } catch (e) {
     // ignore persistence errors
@@ -222,7 +248,8 @@ chrome.runtime.onInstalled.addListener(async () => {
     wakeWord: stored.wakeWord || SIDEKICK_UI_DEFAULTS.wakeWord,
     autoSpeak: stored.autoSpeak ?? SIDEKICK_UI_DEFAULTS.autoSpeak,
     speechRate: stored.speechRate || SIDEKICK_UI_DEFAULTS.speechRate,
-    lastState: stored.lastState || SIDEKICK_UI_DEFAULTS.lastState
+    lastState: stored.lastState || SIDEKICK_UI_DEFAULTS.lastState,
+    sidekickTheme: stored.sidekickTheme || SIDEKICK_UI_DEFAULTS.sidekickTheme
   });
 });
 
@@ -442,6 +469,9 @@ async function removeAssistantNotch() {
 // Stop agent loop
 function stopAgentLoop(message, isError = false) {
   const spoken = `${voiceFriendlyResponse(message)}${!isError && activeState.suggestedFollowup?.question ? ` ${activeState.suggestedFollowup.question}` : ""}`;
+  if (!isError && String(message || "").length > 240) {
+    chrome.storage.local.set({ notchCollapsed: false }).catch(() => {});
+  }
   updateState({
     isRunning: false,
     currentAction: "Idle",
@@ -474,7 +504,7 @@ async function ensureContentScriptInTab(tabId) {
     logAction("Content script inactive. Injecting sidekick DOM driver...", "info");
     await withTimeout(chrome.scripting.executeScript({
       target: { tabId },
-      files: ["content.js"]
+      files: ["vendor/sidekick-local-libs.js", "content.js"]
     }), CONTEXT_TIMEOUT_MS, "Content script injection");
     await new Promise(r => setTimeout(r, 400));
   }
@@ -526,12 +556,20 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 function tryLocalRouting(command) {
   const lower = command.toLowerCase().trim();
   const cleaned = lower.replace(/[?.!]+$/g, "").trim();
+  const workflowRoute = classifyAdvancedWorkflow(command);
+  if (workflowRoute) {
+    return { tool: workflowRoute.tool, args: workflowRoute.args };
+  }
+
   const smartRoute = classifySmartRoute(command);
   if (smartRoute) {
     return { tool: "smart_route", args: smartRoute };
   }
 
   if (detectShoppingIntent(command)) {
+    if (shouldResearchShoppingIntent(command)) {
+      return { tool: "multi_tab_research", args: { query: cleanRouteQuery(command) || command, workflow: "ecommerce", limit: 4 } };
+    }
     return chooseMarketplaceForCommand(command);
   }
   const directUrl = extractUrl(command);
@@ -566,9 +604,16 @@ function tryLocalRouting(command) {
     behance: "https://www.behance.net",
     dribbble: "https://dribbble.com",
     mobbin: "https://mobbin.com",
+    coolors: "https://coolors.co",
+    lucide: "https://lucide.dev",
+    "google fonts": "https://fonts.google.com",
     unsplash: "https://unsplash.com",
     pexels: "https://www.pexels.com",
     pixabay: "https://pixabay.com",
+    runway: "https://runwayml.com",
+    "leonardo ai": "https://leonardo.ai",
+    capcut: "https://www.capcut.com",
+    "epidemic sound": "https://www.epidemicsound.com",
     canva: "https://www.canva.com",
     figma: "https://www.figma.com/community",
     linkedin: "https://www.linkedin.com",
@@ -577,6 +622,32 @@ function tryLocalRouting(command) {
     twitter: "https://x.com",
     reddit: "https://www.reddit.com",
     discord: "https://discord.com/app",
+    "product hunt": "https://www.producthunt.com",
+    "hacker news": "https://news.ycombinator.com",
+    crunchbase: "https://www.crunchbase.com",
+    pitchbook: "https://pitchbook.com",
+    landingfolio: "https://www.landingfolio.com",
+    saaspo: "https://saaspo.com",
+    "y combinator": "https://www.ycombinator.com/companies",
+    yc: "https://www.ycombinator.com/companies",
+    moneycontrol: "https://www.moneycontrol.com",
+    tradingview: "https://www.tradingview.com",
+    coinmarketcap: "https://coinmarketcap.com",
+    bloomberg: "https://www.bloomberg.com",
+    angellist: "https://www.angellist.com",
+    wellfound: "https://wellfound.com/jobs",
+    upwork: "https://www.upwork.com",
+    fiverr: "https://www.fiverr.com",
+    internshala: "https://internshala.com",
+    reuters: "https://www.reuters.com",
+    techcrunch: "https://techcrunch.com",
+    "the rundown ai": "https://www.therundown.ai",
+    "google trends": "https://trends.google.com",
+    "exploding topics": "https://explodingtopics.com",
+    booking: "https://www.booking.com",
+    skyscanner: "https://www.skyscanner.co.in",
+    tripadvisor: "https://www.tripadvisor.com",
+    irctc: "https://www.irctc.co.in/nget/train-search",
     amazon: "https://www.amazon.com",
     flipkart: "https://www.flipkart.com",
     stackoverflow: "https://stackoverflow.com",
@@ -592,7 +663,12 @@ function tryLocalRouting(command) {
     udemy: "https://www.udemy.com",
     "google calendar": "https://calendar.google.com",
     calendar: "https://calendar.google.com",
+    "google sheets": "https://sheets.google.com",
+    sheets: "https://sheets.google.com",
+    "google slides": "https://slides.google.com",
+    slides: "https://slides.google.com",
     todoist: "https://todoist.com",
+    clickup: "https://app.clickup.com",
     miro: "https://miro.com/app",
     netflix: "https://www.netflix.com",
     spotify: "https://open.spotify.com"
@@ -697,6 +773,38 @@ function tryLocalRouting(command) {
   if (lower === "open the best product" || lower === "open best product") {
     return { tool: "open_best_product", args: {} };
   }
+  if (/^zoom in(?: a little)?$/.test(lower)) {
+    return { tool: "zoom_in", args: {} };
+  }
+  if (/^zoom out(?: a little)?$/.test(lower)) {
+    return { tool: "zoom_out", args: {} };
+  }
+  if (/^(?:reset zoom|normal zoom)$/.test(lower)) {
+    return { tool: "reset_zoom", args: {} };
+  }
+  if (/^(?:fill this form|help me apply|help me fill this)$/.test(lower)) {
+    return { tool: "detect_form", args: {} };
+  }
+  const fillAsMatch = command.match(/^fill\s+(?:my\s+)?(.+?)\s+as\s+(.+)$/i);
+  if (fillAsMatch) {
+    return { tool: "get_form_fields", args: { hint: fillAsMatch[1], value: fillAsMatch[2] } };
+  }
+  const extractVisibleMatch = lower.match(/^extract all (prices|emails|phone numbers|links|headings|dates|jobs|courses|events|contact info)(?: from this page)?$/);
+  if (extractVisibleMatch) {
+    const toolMap = {
+      prices: "extract_prices",
+      emails: "extract_emails",
+      "phone numbers": "extract_phone_numbers",
+      links: "extract_links",
+      headings: "extract_headings",
+      dates: "extract_dates",
+      jobs: "extract_jobs",
+      courses: "extract_courses",
+      events: "extract_events",
+      "contact info": "extract_contact_info"
+    };
+    return { tool: toolMap[extractVisibleMatch[1]], args: {} };
+  }
   if (lower === "close tab" || lower === "close this tab") {
     return { tool: "close_current_tab", args: {} };
   }
@@ -724,9 +832,17 @@ const SMART_ROUTE_DEFINITIONS = {
   media: ["youtube", "spotify"],
   social: ["instagram", "x", "linkedin", "reddit", "discord"],
   productivity: ["notion", "google_docs", "google_calendar", "todoist", "miro"],
-  research: ["google", "reddit", "github", "youtube"],
+  research: ["google", "reddit", "product_hunt", "github", "youtube"],
   games: ["steam", "epic_games", "roblox", "minecraft", "crazygames"],
-  startup: ["crunchbase", "linkedin", "reddit"]
+  startup: ["crunchbase", "product_hunt", "hacker_news", "yc", "linkedin", "reddit"],
+  business: ["crunchbase", "pitchbook", "product_hunt", "hacker_news", "yc"],
+  design: ["dribbble", "behance", "awwwards", "mobbin", "coolors"],
+  creative: ["pexels", "pixabay", "runway", "leonardo_ai", "youtube"],
+  finance: ["moneycontrol", "tradingview", "coinmarketcap", "bloomberg", "angellist"],
+  jobs: ["linkedin_jobs", "wellfound", "internshala", "upwork", "fiverr"],
+  news: ["reuters", "techcrunch", "rundown_ai", "google_trends", "exploding_topics"],
+  travel: ["google_maps", "booking", "skyscanner", "tripadvisor", "irctc"],
+  automation: ["google_docs", "google_sheets", "google_slides", "notion", "clickup"]
 };
 
 const SMART_ROUTE_SITES = {
@@ -734,6 +850,12 @@ const SMART_ROUTE_SITES = {
   reddit: { label: "Reddit", url: (query) => `https://www.reddit.com/search/?q=${encodeURIComponent(query)}` },
   github: { label: "GitHub", url: (query) => `https://github.com/search?q=${encodeURIComponent(query)}` },
   youtube: { label: "YouTube", url: (query) => `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}` },
+  product_hunt: { label: "Product Hunt", url: (query) => `https://www.producthunt.com/search?q=${encodeURIComponent(query)}` },
+  hacker_news: { label: "Hacker News", url: (query) => `https://hn.algolia.com/?q=${encodeURIComponent(query)}` },
+  pitchbook: { label: "PitchBook", url: (query) => `https://pitchbook.com/search-results?q=${encodeURIComponent(query)}` },
+  saaspo: { label: "SaaSpo", url: () => "https://saaspo.com" },
+  landingfolio: { label: "Landingfolio", url: (query) => `https://www.landingfolio.com/search?query=${encodeURIComponent(query)}` },
+  yc: { label: "Y Combinator", url: (query) => `https://www.ycombinator.com/companies?query=${encodeURIComponent(query)}` },
   amazon: { label: "Amazon", url: (query) => buildMarketplaceUrl("amazon_india", query) },
   flipkart: { label: "Flipkart", url: (query) => buildMarketplaceUrl("flipkart", query) },
   stackoverflow: { label: "Stack Overflow", url: (query) => `https://stackoverflow.com/search?q=${encodeURIComponent(query)}` },
@@ -741,7 +863,39 @@ const SMART_ROUTE_SITES = {
   npm: { label: "npm", url: (query) => `https://www.npmjs.com/search?q=${encodeURIComponent(query)}` },
   crunchbase: { label: "Crunchbase", url: (query) => `https://www.crunchbase.com/discover/organization.companies/field/organizations/name/${encodeURIComponent(query)}` },
   linkedin: { label: "LinkedIn", url: (query) => `https://www.linkedin.com/search/results/all/?keywords=${encodeURIComponent(query)}` },
+  linkedin_jobs: { label: "LinkedIn Jobs", url: (query) => `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(query)}` },
   coursera: { label: "Coursera", url: (query) => `https://www.coursera.org/search?query=${encodeURIComponent(query)}` },
+  dribbble: { label: "Dribbble", url: (query) => `https://dribbble.com/search/${encodeURIComponent(query)}` },
+  behance: { label: "Behance", url: (query) => `https://www.behance.net/search/projects?search=${encodeURIComponent(query)}` },
+  awwwards: { label: "Awwwards", url: (query) => `https://www.awwwards.com/websites/?text=${encodeURIComponent(query)}` },
+  google_fonts: { label: "Google Fonts", url: (query) => `https://fonts.google.com/?query=${encodeURIComponent(query)}` },
+  lucide: { label: "Lucide", url: (query) => `https://lucide.dev/icons/?search=${encodeURIComponent(query)}` },
+  coolors: { label: "Coolors", url: () => "https://coolors.co" },
+  pexels: { label: "Pexels", url: (query) => `https://www.pexels.com/search/${encodeURIComponent(query)}/` },
+  pixabay: { label: "Pixabay", url: (query) => `https://pixabay.com/images/search/${encodeURIComponent(query)}/` },
+  runway: { label: "Runway", url: () => "https://runwayml.com" },
+  leonardo_ai: { label: "Leonardo AI", url: () => "https://leonardo.ai" },
+  epidemic_sound: { label: "Epidemic Sound", url: (query) => `https://www.epidemicsound.com/search/?term=${encodeURIComponent(query)}` },
+  capcut: { label: "CapCut", url: () => "https://www.capcut.com" },
+  moneycontrol: { label: "Moneycontrol", url: (query) => `https://www.moneycontrol.com/stocksmarketsindia/?search_str=${encodeURIComponent(query)}` },
+  tradingview: { label: "TradingView", url: (query) => `https://www.tradingview.com/search/?query=${encodeURIComponent(query)}` },
+  coinmarketcap: { label: "CoinMarketCap", url: (query) => `https://coinmarketcap.com/search/?q=${encodeURIComponent(query)}` },
+  bloomberg: { label: "Bloomberg", url: (query) => `https://www.bloomberg.com/search?query=${encodeURIComponent(query)}` },
+  angellist: { label: "AngelList", url: (query) => `https://www.angellist.com/search?q=${encodeURIComponent(query)}` },
+  wellfound: { label: "Wellfound", url: (query) => `https://wellfound.com/jobs?keywords=${encodeURIComponent(query)}` },
+  upwork: { label: "Upwork", url: (query) => `https://www.upwork.com/search/jobs/?q=${encodeURIComponent(query)}` },
+  fiverr: { label: "Fiverr", url: (query) => `https://www.fiverr.com/search/gigs?query=${encodeURIComponent(query)}` },
+  internshala: { label: "Internshala", url: (query) => `https://internshala.com/internships/keywords-${encodeURIComponent(query)}` },
+  reuters: { label: "Reuters", url: (query) => `https://www.reuters.com/site-search/?query=${encodeURIComponent(query)}` },
+  techcrunch: { label: "TechCrunch", url: (query) => `https://techcrunch.com/search/${encodeURIComponent(query)}` },
+  rundown_ai: { label: "The Rundown AI", url: () => "https://www.therundown.ai" },
+  google_trends: { label: "Google Trends", url: (query) => `https://trends.google.com/trends/explore?q=${encodeURIComponent(query)}` },
+  exploding_topics: { label: "Exploding Topics", url: (query) => `https://explodingtopics.com/search?q=${encodeURIComponent(query)}` },
+  google_maps: { label: "Google Maps", url: (query) => `https://www.google.com/maps/search/${encodeURIComponent(query)}` },
+  booking: { label: "Booking.com", url: (query) => `https://www.booking.com/searchresults.html?ss=${encodeURIComponent(query)}` },
+  skyscanner: { label: "Skyscanner", url: () => "https://www.skyscanner.co.in" },
+  tripadvisor: { label: "Tripadvisor", url: (query) => `https://www.tripadvisor.com/Search?q=${encodeURIComponent(query)}` },
+  irctc: { label: "IRCTC", url: () => "https://www.irctc.co.in/nget/train-search" },
   steam: { label: "Steam", url: (query) => `https://store.steampowered.com/search/?term=${encodeURIComponent(query)}` },
   epic_games: { label: "Epic Games Store", url: (query) => `https://store.epicgames.com/en-US/browse?q=${encodeURIComponent(query)}&sortBy=relevancy&sortDir=DESC&count=40` },
   roblox: { label: "Roblox", url: () => "https://www.roblox.com" },
@@ -753,8 +907,11 @@ const SMART_ROUTE_SITES = {
   spotify: { label: "Spotify", url: (query) => `https://open.spotify.com/search/${encodeURIComponent(query)}` },
   notion: { label: "Notion", url: () => "https://www.notion.so" },
   google_docs: { label: "Google Docs", url: () => "https://docs.google.com" },
+  google_sheets: { label: "Google Sheets", url: () => "https://sheets.google.com" },
+  google_slides: { label: "Google Slides", url: () => "https://slides.google.com" },
   google_calendar: { label: "Google Calendar", url: () => "https://calendar.google.com" },
   todoist: { label: "Todoist", url: () => "https://todoist.com" },
+  clickup: { label: "ClickUp", url: () => "https://app.clickup.com" },
   miro: { label: "Miro", url: () => "https://miro.com/app" }
 };
 
@@ -769,6 +926,14 @@ function classifySmartRoute(command) {
   if (/research\s+ai\s+tools?/.test(lower)) return smartRouteArgs("research", query || "AI tools", ["google", "reddit", "github", "youtube"]);
   if (/research\s+ai\s+browser\s+agents?/.test(lower)) return smartRouteArgs("research", query || "AI browser agents", ["google", "reddit", "github", "youtube"]);
   if (/startup research|research\s+(?:a\s+)?startup|competitor research|company research/.test(lower)) return smartRouteArgs("startup", query, SMART_ROUTE_DEFINITIONS.startup);
+  if (/(?:funding|startup|business|saas inspiration|landing page inspiration|yc startup|indie product|product hunt)/.test(lower)) return smartRouteArgs("business", query, SMART_ROUTE_DEFINITIONS.business);
+  if (/(?:ui inspiration|design inspiration|website inspiration|font|icons?|color palette|design system|creative)/.test(lower)) return smartRouteArgs("design", query, SMART_ROUTE_DEFINITIONS.design);
+  if (/(?:stock footage|ai video|ai image|audio|music|thumbnail|video editing|content creation)/.test(lower)) return smartRouteArgs("creative", query, SMART_ROUTE_DEFINITIONS.creative);
+  if (/(?:stocks?|crypto|finance|market|trading|coin|financial news|startup investing)/.test(lower)) return smartRouteArgs("finance", query, SMART_ROUTE_DEFINITIONS.finance);
+  if (/(?:remote jobs?|freelanc|tech jobs?|internships?|frontend internships?)/.test(lower)) return smartRouteArgs("jobs", query, SMART_ROUTE_DEFINITIONS.jobs);
+  if (/(?:global news|tech news|ai news|trends?|trend tracking|social trends)/.test(lower)) return smartRouteArgs("news", query, SMART_ROUTE_DEFINITIONS.news);
+  if (/(?:maps?|navigation|hotels?|flights?|reviews?|trip|travel|trains? india|irctc)/.test(lower)) return smartRouteArgs("travel", query, SMART_ROUTE_DEFINITIONS.travel);
+  if (/(?:google sheets|google slides|clickup|automation targets?|productivity automation)/.test(lower)) return smartRouteArgs("automation", query, SMART_ROUTE_DEFINITIONS.automation);
   if (/best\s+(?:online\s+)?course|find\s+.*course|learn\s+.*course/.test(lower)) return smartRouteArgs("education", query, SMART_ROUTE_DEFINITIONS.education);
   if (/coding help|debug|stackoverflow|stack overflow|mdn|developer docs/.test(lower)) return smartRouteArgs("dev", query, SMART_ROUTE_DEFINITIONS.dev);
   if (/react animation libraries|npm package|javascript library|js library|coding library|developer tool|api docs/.test(lower)) return smartRouteArgs("dev", query, ["google", "github", "npm", "mdn"]);
@@ -779,7 +944,35 @@ function classifySmartRoute(command) {
   if (/(?:notes?|docs?|calendar|tasks?|todo|whiteboard|workspace|productivity)\b/.test(lower)) return smartRouteArgs("productivity", query, SMART_ROUTE_DEFINITIONS.productivity);
   if (/(?:pc games?|epic games?|roblox|minecraft|browser games?|crazygames|steam)\b/.test(lower)) return smartRouteArgs("games", query, SMART_ROUTE_DEFINITIONS.games);
   if (/^research\b/.test(lower)) return smartRouteArgs("research", query, SMART_ROUTE_DEFINITIONS.research);
+  if (/^(?:research|find|compare).*(?:for\s+10\s+minutes|final report|generate a final conclusion|top\s+5|best matches)/.test(lower)) {
+    const intent = /laptop|hoodie|under\s+\d|price|buy|shopping/.test(lower) ? "ecommerce" : /job|internship|freelanc/.test(lower) ? "jobs" : "research";
+    return smartRouteArgs(intent, query, SMART_ROUTE_DEFINITIONS[intent]);
+  }
 
+  return null;
+}
+
+function classifyAdvancedWorkflow(command) {
+  const lower = String(command || "").toLowerCase().trim();
+  const query = cleanRouteQuery(command);
+  if (/continue\s+(?:yesterday'?s|last|previous)\s+research|resume\s+research/.test(lower)) {
+    return { tool: "resume_research", args: { query } };
+  }
+  if (/(?:research.*(?:10\s+minutes|final report|final conclusion|generate.*report|compare products|best ai ides|browser assistants|startup ideas)|find.*trending startup ideas)/.test(lower)) {
+    return { tool: "multi_tab_research", args: { query: query || command, workflow: "research" } };
+  }
+  if (/find.*(?:best|top\s+5).*(?:laptop|hoodie|phone|headphones|shoes|under\s+\d)/.test(lower)) {
+    return { tool: "multi_tab_research", args: { query: query || command, workflow: "ecommerce" } };
+  }
+  if (/(?:find|research|compare).*(?:best|cheap|cheapest|budget|deal|under\s+\d|value for money|recommend).*(?:product|laptop|hoodie|phone|headphones|shoes|keyboard|clothes)/.test(lower)) {
+    return { tool: "multi_tab_research", args: { query: query || command, workflow: "ecommerce" } };
+  }
+  if (/find.*(?:remote|frontend|tech|internship|jobs?|freelance)/.test(lower)) {
+    return { tool: "multi_tab_research", args: { query: query || command, workflow: "jobs" } };
+  }
+  if (/parallel search|open.*in parallel/.test(lower)) {
+    return { tool: "parallel_search", args: { query: query || command } };
+  }
   return null;
 }
 
@@ -836,6 +1029,11 @@ const INDIA_MARKETPLACE_ROUTES = {
 function detectShoppingIntent(command) {
   const lower = String(command || "").toLowerCase();
   return /(buy|best deal|cheapest|under\s+\d|under\s+₹|price|laptop|shoes|hoodie|t-shirt|clothes|phone|headphones|keyboard|compare products|running shoes|deal)/.test(lower);
+}
+
+function shouldResearchShoppingIntent(command) {
+  const lower = String(command || "").toLowerCase();
+  return /(find|research|compare|best|top|cheap|cheapest|budget|deal|under\s+\d|under\s+₹|value for money|recommend)/.test(lower);
 }
 
 function inferShoppingCategory(command) {
@@ -990,8 +1188,24 @@ ${responseText}`;
 
 // Local chunking compressor for long pages to prevent token limits
 async function localChunkAndSummarize(pageText) {
+  const localExtractiveSummary = () => {
+    const sentences = String(pageText || "")
+      .replace(/\s+/g, " ")
+      .split(/(?<=[.!?])\s+/)
+      .map((sentence) => sentence.trim())
+      .filter((sentence) => sentence.length > 60 && sentence.length < 320);
+    const top = sentences.slice(0, 5);
+    return top.length
+      ? top.map((sentence) => `- ${sentence}`).join("\n")
+      : compactText(pageText, 900);
+  };
+
   if (pageText.length <= 4000) {
-    return askLLMToDigest("Summarize this webpage simple and clear in 2-3 short bullet points:", pageText);
+    try {
+      return await askLLMToDigest("Summarize this webpage simple and clear in 2-3 short bullet points:", pageText);
+    } catch (err) {
+      return localExtractiveSummary();
+    }
   }
   
   // Split into chunks of 4000 characters
@@ -1004,13 +1218,21 @@ async function localChunkAndSummarize(pageText) {
   
   const chunkSummaries = [];
   for (let idx = 0; idx < chunks.length; idx++) {
-    const sum = await askLLMToDigest(`Summarize part ${idx + 1} of the webpage:`, chunks[idx]);
+    let sum;
+    try {
+      sum = await askLLMToDigest(`Summarize part ${idx + 1} of the webpage:`, chunks[idx]);
+    } catch (err) {
+      sum = compactText(chunks[idx], 700);
+    }
     chunkSummaries.push(sum);
   }
   
   const merged = chunkSummaries.join("\n\n");
-  const finalSummary = await askLLMToDigest("Consolidate the following section summaries into a single cohesive, high-quality, brief bulleted summary:", merged);
-  return finalSummary;
+  try {
+    return await askLLMToDigest("Consolidate the following section summaries into a single cohesive, high-quality, brief bulleted summary:", merged);
+  } catch (err) {
+    return localExtractiveSummary();
+  }
 }
 
 // Main logic coordinator
@@ -1032,8 +1254,7 @@ async function startAgentLoop(command, options = {}) {
       }
     }
     if (!hasAnyKey) {
-      stopAgentLoop("No API keys configured. Go to Settings to add one.", true);
-      return;
+      console.info("Sidekick running in free local-routing mode because no API keys are configured.");
     }
   } else if (config.aiMode === "ollama") {
     const status = await checkOllamaStatus();
@@ -1137,6 +1358,14 @@ async function runNextStep() {
       if (res && res.success) {
         context = res.data;
       }
+      const perceptionRes = await delegateToContent("GET_DOM_PERCEPTION", {}, tab.id);
+      if (perceptionRes?.success) {
+        context.domPerception = {
+          viewport: perceptionRes.data?.viewport,
+          elements: (perceptionRes.data?.elements || []).slice(0, 80),
+          note: perceptionRes.data?.note
+        };
+      }
       const searchResultsRes = await delegateToContent("GET_SEARCH_RESULTS", {}, tab.id);
       if (searchResultsRes?.success) {
         context.searchResults = searchResultsRes.data || [];
@@ -1190,6 +1419,7 @@ Inputs (max 12): ${JSON.stringify(context.inputs || [])}
 Links (max 20): ${JSON.stringify(context.links || [])}
 Search results (max 20): ${JSON.stringify(context.searchResults || [])}
 Headings: ${JSON.stringify(context.headings || [])}
+DOM perception (visible elements with roles and bounding boxes, max 80): ${JSON.stringify(context.domPerception || {})}
 
 LAST 3 AGENT ACTIONS:
 ${lastLogs || "None"}
@@ -1200,27 +1430,29 @@ Please choose exactly ONE next tool call to solve the user's request.`;
   await updateState({ currentAction: `Step ${activeState.currentStep}: Reasoning...` });
   logAction(`Step ${activeState.currentStep}: Deciding next action...`, "info");
 
-  const systemPrompt = `You are Sidekick, a voice-first browser agent. Return exactly one compact JSON object: {"tool":"name","args":{}}. No markdown or explanation.
+  const systemPrompt = `You are Sidekick, a prompt-based browser agent. Return exactly one compact JSON object: {"tool":"name","args":{}}. No markdown or explanation.
 Use only these tools:
-nav: open_url,new_tab,open_task_in_new_tab,close_current_tab,close_tab,close_window,reload_page,go_back,go_forward,get_current_url,get_page_title,list_windows,list_tabs,switch_to_tab,duplicate_current_tab,open_marketplace,smart_route
+nav: open_url,new_tab,open_task_in_new_tab,open_multiple_tabs,close_current_tab,close_tab,close_window,reload_page,go_back,go_forward,get_current_url,get_page_title,list_windows,list_tabs,switch_to_tab,duplicate_current_tab,open_marketplace,smart_route
 search: google_search,youtube_search,github_search,maps_search,site_search,open_profile,amazon_search,flipkart_search,myntra_search,ajio_search,croma_search
-page: get_page_context,get_page_text,get_links,get_search_results,get_buttons,get_inputs,get_headings,get_images,find_text_on_page,click_text,click_link,click_button,click_input,hover_text,double_click_text,scroll_down,scroll_up,scroll_to_top,scroll_to_bottom,press_enter,press_key
-input: type_text,clear_input,paste_text,select_dropdown,check_checkbox,uncheck_checkbox,select_all
+page: get_page_context,get_dom_perception,get_page_text,get_links,get_search_results,get_buttons,get_inputs,get_headings,get_images,find_text_on_page,click_text,click_link,click_button,click_input,click_element,hover_text,double_click_text,scroll_down,scroll_up,scroll_to_top,scroll_to_bottom,press_enter,press_key
+input: type_text,type_into_element,clear_input,paste_text,select_dropdown,check_checkbox,uncheck_checkbox,select_all
 form: detect_form,get_form_fields,fill_field,select_option,check_box,uncheck_box,choose_radio,clear_field,review_form,submit_form
 writing: write_text,rewrite_selected_text,fix_grammar_selected_text,shorten_selected_text,expand_selected_text,change_tone_selected_text,insert_bullet_points,continue_writing,replace_selected_text
 commerce: extract_product_cards,extract_prices,compare_prices,find_best_value_item,sort_items_by_price,extract_reviews,extract_ratings,compare_products,open_best_product,open_product_by_id
 youtube: youtube_seek_to_timestamp,youtube_get_current_timestamp,youtube_get_video_title,youtube_open_history,youtube_open_profile,youtube_open_subscriptions,youtube_open_watch_later
 extract: extract_table,extract_emails,extract_phone_numbers,extract_links,extract_headings,extract_dates,extract_jobs,extract_courses,extract_events,extract_contact_info
 digest: summarize_page,extract_notes,answer_from_page,compare_page_items
-browser: zoom_in,zoom_out,reset_zoom,scroll_to_text,highlight_text,open_link_by_text,open_downloads,open_history,open_bookmarks
+browser: zoom_in,zoom_out,reset_zoom,scroll_to_text,find_on_page,highlight_text,open_link_by_text,open_downloads,open_history,open_bookmarks
+operator: multi_tab_research,parallel_search,compare_multiple_pages,cross_reference_information,generate_report,save_research_session,resume_research,batch_extract_links,watch_page_changes,track_price_changes,save_page_snapshot,monitor_tab,auto_scroll_read
 utility: wait,copy_current_url,copy_selected_text,ask_user,done
 
-Rules: choose one next action; use sk-* ids, visible text, visible search results, or product ids from current page tools; never invent page elements or call a tool with missing required args. If a link is needed, choose from visible links or search results. Ask_user only if genuinely ambiguous or risky. Risky: payment,purchase,delete,submit/send/post,password/login,account settings,suspicious downloads.
+Rules: choose one next action; use sk-* ids, visible text, visible search results, DOM perception element ids, or product ids from current page tools; never invent page elements or call a tool with missing required args. If a link/button/input is visually described by the user, use DOM perception: text, aria-label, placeholder, role, and bounding box. Use click_element with a chosen id, or type_into_element with a chosen id and text. This is DOM perception only, not screenshot vision. Real screenshot vision is a future optional upgrade. Ask_user only if genuinely ambiguous or risky. Risky: payment,purchase,delete,submit/send/post,password/login,account settings,suspicious downloads.
 Forms: detect_form first, then get_form_fields, then fill one field at a time. Ask short questions for missing form values. Never submit_form until the user clearly confirms submission. Ask clearly before filling sensitive fields: password, payment, address, phone number, government ID.
 Writing: for rewrite/fix/shorten/expand/tone commands, operate on selected text when possible. Before replacing selected text use replace_selected_text so an undo copy is stored. Writing modes include Formal, Friendly, Short, Professional, Gen Z casual, Sales copy, Simple language, Academic, Startup pitch.
 Scraping: extract only visible public page data. Do not bypass logins, paywalls, CAPTCHAs, or site restrictions.
 Zoom: only zoom if the user asks for zoom/readability help.
 Navigation brain: classify intent before search. shopping -> ecommerce routes, learning -> education, coding -> dev, entertainment -> media, social -> social platforms, productivity -> workspace apps, research -> multi-source search. Known site/app or URL -> open_url. Best/top/rated/good link -> google_search or direct marketplace search, then use get_search_results/get_links/click_link/open_best_product. Definitions -> Merriam-Webster/Wikipedia/Britannica via search/open. Videos/tutorials -> youtube_search. Notes/docs/files -> Keep/Docs/Drive/Notion. Places/nearby -> maps_search.
+Internet operator brain: for long research, jobs, shopping comparison, trend hunting, or "final report" tasks, prefer multi_tab_research or parallel_search, then batch_extract_links/compare_multiple_pages/cross_reference_information/generate_report. Website specialties: YouTube video search/play/fullscreen/transcripts when available; Amazon/Flipkart product/rating/price extraction; Reddit opinions via page text; GitHub README/repo pages via page text and links; LinkedIn job/profile summaries via visible public page data.
 Research routing: AI tools or broad research -> Google, Reddit, GitHub, YouTube. Best laptop -> Amazon, Flipkart, YouTube reviews. Coding help -> Stack Overflow, GitHub, MDN. Startup research -> Crunchbase, LinkedIn, Reddit. Best course -> Coursera, YouTube, Reddit.
 Shopping brain: prefer direct marketplace search over generic Google search. Use Amazon India/Flipkart/Croma for electronics, Myntra/Ajio for fashion and shoes, Nykaa for beauty, IKEA/Pepperfry for home. Compare visible products using price, rating, reviews, and relevance. Do not claim something is best unless visible data supports it.
 Completion: {"tool":"done","args":{"message":"short result"}}.`;
@@ -1337,6 +1569,103 @@ async function copyToTabClipboard(text, tabId) {
     },
     args: [text]
   });
+}
+
+function getWorkflowRoute(workflow = "research", query = "") {
+  const normalized = String(workflow || "research").toLowerCase();
+  if (normalized === "ecommerce" || normalized === "shopping") return ["amazon", "flipkart", "youtube", "google"];
+  if (normalized === "jobs") return ["linkedin_jobs", "wellfound", "internshala", "upwork"];
+  if (normalized === "startup" || normalized === "business") return SMART_ROUTE_DEFINITIONS.startup;
+  if (normalized === "design") return SMART_ROUTE_DEFINITIONS.design;
+  if (normalized === "finance") return SMART_ROUTE_DEFINITIONS.finance;
+  if (normalized === "news") return SMART_ROUTE_DEFINITIONS.news;
+  if (/ai ide|browser assistant|developer|coding/i.test(query)) return ["github", "reddit", "youtube", "product_hunt", "google"];
+  return SMART_ROUTE_DEFINITIONS.research;
+}
+
+function buildRouteUrls(route = [], query = "") {
+  return route
+    .map((siteKey) => {
+      const site = SMART_ROUTE_SITES[siteKey];
+      const url = site?.url(query);
+      return url ? { siteKey, label: site.label, url } : null;
+    })
+    .filter(Boolean);
+}
+
+async function rememberWorkflowSession(kind, session) {
+  const memory = await getSidekickMemory();
+  const key = kind === "shopping" ? "shoppingSessions" : "researchSessions";
+  const sessions = [session, ...(memory[key] || [])].slice(0, 20);
+  memory[key] = sessions;
+  memory.openWorkflows = [session, ...(memory.openWorkflows || [])].slice(0, 20);
+  memory.activeTabs = session.tabs || memory.activeTabs || [];
+  await saveSidekickMemory(memory);
+  return session;
+}
+
+async function openUrlsInTabs(urls = [], makeActive = false) {
+  const created = [];
+  for (const item of urls) {
+    const tab = await chrome.tabs.create({ url: item.url || item, active: makeActive && created.length === 0 });
+    created.push({ id: tab.id, url: item.url || item, title: item.label || tab.title || "", siteKey: item.siteKey || "" });
+  }
+  if (created[0]?.id) {
+    activeState.sessionTabId = created[0].id;
+    await updateState({});
+  }
+  return created;
+}
+
+async function extractTabSnapshot(tabId, mode = "text") {
+  try {
+    await ensureContentScriptInTab(tabId);
+    const readableRes = await delegateToContent("GET_READABLE_PAGE", {}, tabId);
+    const textRes = readableRes?.success ? { data: readableRes.data?.textContent || "" } : await delegateToContent("GET_PAGE_TEXT", {}, tabId);
+    const linksRes = await delegateToContent("EXTRACT_LINKS", {}, tabId);
+    const productsRes = await delegateToContent("EXTRACT_PRODUCT_CARDS", {}, tabId);
+    const title = await chrome.tabs.get(tabId).then(tab => tab.title || tab.url || `Tab ${tabId}`).catch(() => `Tab ${tabId}`);
+    return {
+      tabId,
+      title,
+      url: readableRes?.data?.url || "",
+      excerpt: readableRes?.data?.excerpt || "",
+      text: mode === "links" ? "" : compactText(textRes?.data || "", 5000),
+      links: linksRes?.data || [],
+      products: productsRes?.data || []
+    };
+  } catch (err) {
+    return { tabId, error: err.message || "Snapshot failed" };
+  }
+}
+
+function generateLocalReport({ query, workflow, sources }) {
+  const cleanSources = (sources || []).filter((source) => !source.error);
+  if (workflow === "ecommerce") {
+    const products = cleanSources.flatMap((source) => (source.products || []).map((product) => ({
+      ...product,
+      sourceTitle: source.title,
+      sourceUrl: source.url
+    })));
+    const ranked = self.SidekickLibs?.rankProducts?.(products, query) || products;
+    if (!ranked.length) {
+      return `I opened the research tabs for "${query}", but I could not extract visible product cards yet. Best next step: open the marketplace result pages fully, then ask me to extract products or compare prices.`;
+    }
+    const top = ranked.slice(0, 5).map((item, index) => {
+      const price = item.price ? ` - ${item.price}` : "";
+      const rating = item.rating ? ` - rating ${item.rating}` : "";
+      const reviews = item.reviews ? ` - ${item.reviews}` : "";
+      return `${index + 1}. ${item.title}${price}${rating}${reviews} (${item.platform || item.sourceTitle || "source"})`;
+    }).join("\n");
+    return `Best visible options for "${query}":\n${top}\n\nMy local ranking weighs relevance, price, rating, and review count from visible page data.`;
+  }
+
+  const sourceLines = cleanSources.slice(0, 6).map((source, index) => {
+    const summary = compactText(source.excerpt || source.text || "", 280);
+    const host = source.url ? new URL(source.url).hostname.replace(/^www\./, "") : "source";
+    return `${index + 1}. ${source.title || host} (${host}): ${summary || "Visible page data extracted."}`;
+  }).join("\n");
+  return `Research summary for "${query}":\n${sourceLines || "I opened the research tabs, but there was not enough visible public text to summarize yet."}\n\nConclusion: I used visible DOM/readable article extraction only. Open the strongest source tab or ask me to compare the pages for a deeper pass.`;
 }
 
 function validateLinkArgs(args = {}) {
@@ -1641,6 +1970,159 @@ async function executeTool(toolName, args = {}) {
       };
     }
 
+    case "open_multiple_tabs":
+    case "parallel_search": {
+      const query = args.query || activeState.command || "";
+      const route = Array.isArray(args.route) ? args.route : getWorkflowRoute(args.workflow || "research", query);
+      const urls = args.urls?.length ? args.urls.map((url) => ({ url, label: url })) : buildRouteUrls(route, query);
+      if (!urls.length) return { success: false, error: "No URLs to open." };
+      const tabs = await openUrlsInTabs(urls.slice(0, args.limit || 6), false);
+      const session = {
+        id: `session-${Date.now()}`,
+        kind: args.workflow || "research",
+        query,
+        route: urls.map((item) => item.label),
+        tabs,
+        notes: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      };
+      await rememberWorkflowSession(session.kind === "ecommerce" ? "shopping" : "research", session);
+      return { success: true, data: `Opened ${tabs.length} tabs in parallel for "${query}": ${session.route.join(" -> ")}`, session };
+    }
+
+    case "multi_tab_research": {
+      const query = args.query || activeState.command || "";
+      const workflow = args.workflow || "research";
+      const route = getWorkflowRoute(workflow, query);
+      const urls = buildRouteUrls(route, query).slice(0, args.limit || 6);
+      const tabs = await openUrlsInTabs(urls, false);
+      await updateState({ currentAction: `Reading ${tabs.length} tabs and preparing report...` });
+      await new Promise(r => setTimeout(r, args.loadWaitMs || 3500));
+      const snapshots = [];
+      for (const tabInfo of tabs) {
+        snapshots.push(await extractTabSnapshot(tabInfo.id));
+      }
+      const reportPrompt = workflow === "ecommerce"
+        ? "Create a useful shopping research report from these visible pages. Prefer concrete products, prices, ratings, specs, and review signals when visible. If data is incomplete, say what is missing and give the best next step:"
+        : workflow === "jobs"
+          ? "Create a useful jobs research report from these visible pages. Extract roles, companies, locations, requirements, and best matches when visible. If data is incomplete, say what is missing and give the best next step:"
+          : "Create a concise research report from these visible pages. Compare sources, identify strongest findings, cite source titles/domains, and end with a clear conclusion:";
+      let report;
+      try {
+        report = await askLLMToDigest(reportPrompt, JSON.stringify({ query, workflow, sources: snapshots }));
+      } catch (err) {
+        report = generateLocalReport({ query, workflow, sources: snapshots });
+      }
+      const session = {
+        id: `session-${Date.now()}`,
+        kind: workflow,
+        query,
+        route: urls.map((item) => item.label),
+        tabs,
+        notes: [report],
+        snapshots,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      };
+      await rememberWorkflowSession(workflow === "ecommerce" ? "shopping" : "research", session);
+      await saveLocalMemory(`sidekick:session:${session.id}`, session);
+      return { success: true, data: report, session };
+    }
+
+    case "batch_extract_links": {
+      const tabs = args.tabIds?.length ? await Promise.all(args.tabIds.map((id) => chrome.tabs.get(id).catch(() => null))) : await chrome.tabs.query({ currentWindow: true });
+      const snapshots = [];
+      for (const tab of tabs.filter(Boolean).slice(0, args.limit || 8)) {
+        if (!isSupportedPageUrl(tab.url)) continue;
+        snapshots.push(await extractTabSnapshot(tab.id, "links"));
+      }
+      const memory = await getSidekickMemory();
+      memory.extractedNotes = [{ type: "links", snapshots, at: Date.now() }, ...(memory.extractedNotes || [])].slice(0, 30);
+      await saveSidekickMemory(memory);
+      return { success: true, data: snapshots };
+    }
+
+    case "compare_multiple_pages":
+    case "cross_reference_information": {
+      const tabs = args.tabIds?.length ? await Promise.all(args.tabIds.map((id) => chrome.tabs.get(id).catch(() => null))) : await chrome.tabs.query({ currentWindow: true });
+      const snapshots = [];
+      for (const tab of tabs.filter(Boolean).slice(0, args.limit || 6)) {
+        if (!isSupportedPageUrl(tab.url)) continue;
+        snapshots.push(await extractTabSnapshot(tab.id));
+      }
+      const digest = await askLLMToDigest(
+        toolName === "cross_reference_information" ? "Cross-reference these pages. Identify agreements, conflicts, useful evidence, and gaps:" : "Compare these pages and summarize the strongest options, claims, prices, products, or findings:",
+        JSON.stringify(snapshots)
+      );
+      const memory = await getSidekickMemory();
+      memory.extractedNotes = [{ type: toolName, query: args.query || activeState.command, digest, snapshots, at: Date.now() }, ...(memory.extractedNotes || [])].slice(0, 30);
+      await saveSidekickMemory(memory);
+      return { success: true, data: digest };
+    }
+
+    case "generate_report": {
+      const memory = await getSidekickMemory();
+      const latest = (memory.extractedNotes || [])[0] || (memory.openWorkflows || [])[0] || {};
+      const report = await askLLMToDigest("Generate a concise final report with recommendation, evidence, caveats, and next steps:", JSON.stringify({ command: activeState.command, latest }));
+      return { success: true, data: report };
+    }
+
+    case "save_research_session": {
+      const tabs = await chrome.tabs.query({ currentWindow: true });
+      const session = {
+        id: `session-${Date.now()}`,
+        kind: args.kind || "research",
+        query: args.query || activeState.command,
+        tabs: tabs.filter((tab) => isSupportedPageUrl(tab.url)).map((tab) => ({ id: tab.id, title: tab.title, url: tab.url })),
+        notes: args.notes ? [args.notes] : [],
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      };
+      await rememberWorkflowSession(session.kind === "shopping" ? "shopping" : "research", session);
+      return { success: true, data: `Saved research session "${session.query}" with ${session.tabs.length} tabs.`, session };
+    }
+
+    case "resume_research": {
+      const memory = await getSidekickMemory();
+      const sessions = [...(memory.openWorkflows || []), ...(memory.researchSessions || [])];
+      const session = sessions.find((item) => !args.query || item.query?.toLowerCase().includes(String(args.query).toLowerCase())) || sessions[0];
+      if (!session) return { success: false, error: "No saved research session found." };
+      const urls = (session.tabs || []).filter((tab) => tab.url).map((tab) => ({ url: tab.url, label: tab.title || tab.url }));
+      const tabs = await openUrlsInTabs(urls.slice(0, 6), false);
+      return { success: true, data: `Resumed "${session.query}" with ${tabs.length} tabs reopened.`, session: { ...session, tabs } };
+    }
+
+    case "save_page_snapshot": {
+      if (!tabId) return { success: false, error: "No active tab open" };
+      const snapshot = await extractTabSnapshot(tabId);
+      const memory = await getSidekickMemory();
+      memory.extractedNotes = [{ type: "snapshot", snapshot, at: Date.now() }, ...(memory.extractedNotes || [])].slice(0, 30);
+      await saveSidekickMemory(memory);
+      return { success: true, data: snapshot };
+    }
+
+    case "monitor_tab":
+    case "watch_page_changes":
+    case "track_price_changes": {
+      if (!tabId) return { success: false, error: "No active tab open" };
+      const memory = await getSidekickMemory();
+      const monitor = { type: toolName, tabId, url: targetTab.url, title: targetTab.title, query: args.query || activeState.command, createdAt: Date.now() };
+      memory.openWorkflows = [monitor, ...(memory.openWorkflows || [])].slice(0, 20);
+      await saveSidekickMemory(memory);
+      return { success: true, data: `Saved ${toolName.replace(/_/g, " ")} monitor for this tab.` };
+    }
+
+    case "auto_scroll_read": {
+      if (!tabId) return { success: false, error: "No active tab open" };
+      for (let i = 0; i < (args.steps || 4); i += 1) {
+        await delegateToContent("SCROLL_DOWN", {}, tabId);
+        await new Promise(r => setTimeout(r, args.delayMs || 800));
+      }
+      const textRes = await delegateToContent("GET_PAGE_TEXT", {}, tabId);
+      return { success: true, data: compactText(textRes?.data || "Finished reading visible page.", 2000) };
+    }
+
     case "open_marketplace": {
       const url = buildMarketplaceUrl(args.platform, args.query || "");
       if (!url) return { success: false, error: "Missing marketplace target." };
@@ -1728,6 +2210,97 @@ async function executeTool(toolName, args = {}) {
       else await chrome.tabs.create({ url });
       await new Promise(r => setTimeout(r, 2000));
       return { success: true, data: "Opened watch later playlist" };
+    }
+
+    case "detect_form":
+    case "get_form_fields":
+    case "review_form": {
+      if (!tabId) return { success: false, error: "No active tab open" };
+      const actionMap = {
+        detect_form: "DETECT_FORM",
+        get_form_fields: "GET_FORM_FIELDS",
+        review_form: "REVIEW_FORM"
+      };
+      await ensureContentScriptInTab(tabId);
+      return await delegateToContent(actionMap[toolName], {}, tabId);
+    }
+
+    case "fill_field": {
+      if (!tabId || !args.fieldId) return { success: false, error: "Missing field target." };
+      await ensureContentScriptInTab(tabId);
+      const fieldsRes = await delegateToContent("GET_FORM_FIELDS", {}, tabId);
+      const field = fieldsRes?.data?.find((item) => item.id === args.fieldId);
+      if (isSensitiveFormField(field) && !hasRecentUserConfirmation(/confirm|yes|fill|okay|ok|go ahead/i)) {
+        return {
+          success: true,
+          requiresConfirmation: true,
+          question: `This looks sensitive (${field?.label || "the selected field"}). Should I fill it?`
+        };
+      }
+      return await delegateToContent("FILL_FIELD", args, tabId);
+    }
+
+    case "select_option":
+    case "check_box":
+    case "uncheck_box":
+    case "choose_radio":
+    case "clear_field": {
+      if (!tabId || !args.fieldId) return { success: false, error: "Missing field target." };
+      const actionMap = {
+        select_option: "SELECT_OPTION",
+        check_box: "CHECK_BOX",
+        uncheck_box: "UNCHECK_BOX",
+        choose_radio: "CHOOSE_RADIO",
+        clear_field: "CLEAR_FIELD"
+      };
+      await ensureContentScriptInTab(tabId);
+      return await delegateToContent(actionMap[toolName], args, tabId);
+    }
+
+    case "submit_form": {
+      if (!tabId) return { success: false, error: "No active tab open" };
+      if (!hasRecentUserConfirmation(/confirm submit|confirm send|yes submit|yes send|submit it|send it|post it|go ahead|do it/i)) {
+        return {
+          success: true,
+          requiresConfirmation: true,
+          question: "Please confirm before I submit or send this."
+        };
+      }
+      await ensureContentScriptInTab(tabId);
+      return await delegateToContent("SUBMIT_FORM", {}, tabId);
+    }
+
+    case "write_text":
+    case "replace_selected_text": {
+      if (!tabId) return { success: false, error: "No active tab open" };
+      await ensureContentScriptInTab(tabId);
+      return await delegateToContent(toolName === "write_text" ? "WRITE_TEXT" : "REPLACE_SELECTED_TEXT", args, tabId);
+    }
+
+    case "rewrite_selected_text":
+    case "fix_grammar_selected_text":
+    case "shorten_selected_text":
+    case "expand_selected_text":
+    case "change_tone_selected_text":
+    case "insert_bullet_points":
+    case "continue_writing": {
+      if (!tabId) return { success: false, error: "No active tab open" };
+      await ensureContentScriptInTab(tabId);
+      const selectedRes = await delegateToContent("COPY_SELECTED_TEXT", {}, tabId);
+      const selected = selectedRes?.data || "";
+      const instructionMap = {
+        rewrite_selected_text: `Rewrite this in a ${args.style || "clear"} style:`,
+        fix_grammar_selected_text: "Fix grammar and keep the meaning:",
+        shorten_selected_text: "Make this shorter:",
+        expand_selected_text: "Expand this with useful detail:",
+        change_tone_selected_text: `Change the tone to ${args.tone || "professional"}:`,
+        insert_bullet_points: "Convert this into clean bullet points:",
+        continue_writing: "Continue this writing naturally:"
+      };
+      if (!selected && toolName !== "continue_writing") return { success: false, error: "No selected text found." };
+      const source = selected || activeState.command;
+      const text = await askLLMToDigest(instructionMap[toolName], source);
+      return await delegateToContent(selected ? "REPLACE_SELECTED_TEXT" : "WRITE_TEXT", { text, target: args.target || "" }, tabId);
     }
 
     case "summarize_page": {
@@ -1830,6 +2403,30 @@ async function executeTool(toolName, args = {}) {
       return { success: true, data: `Waited for ${args.ms || 1000}ms` };
     }
 
+    case "zoom_in":
+    case "zoom_out":
+    case "reset_zoom": {
+      if (!tabId) return { success: false, error: "No active tab open" };
+      const currentZoom = await chrome.tabs.getZoom(tabId);
+      const nextZoom = toolName === "reset_zoom" ? 1 : Math.min(3, Math.max(0.25, currentZoom + (toolName === "zoom_in" ? 0.1 : -0.1)));
+      await chrome.tabs.setZoom(tabId, nextZoom);
+      return { success: true, data: `Zoom set to ${Math.round(nextZoom * 100)}%` };
+    }
+
+    case "open_downloads":
+    case "open_history":
+    case "open_bookmarks": {
+      const pageMap = {
+        open_downloads: "chrome://downloads/",
+        open_history: "chrome://history/",
+        open_bookmarks: "chrome://bookmarks/"
+      };
+      const created = await chrome.tabs.create({ url: pageMap[toolName] });
+      activeState.sessionTabId = created.id;
+      await updateState({});
+      return { success: true, data: `Opened ${toolName.replace("open_", "")}` };
+    }
+
     case "compare_products": {
       if (tabId) {
         const listRes = await delegateToContent("EXTRACT_PRODUCT_CARDS", {}, tabId);
@@ -1890,7 +2487,10 @@ async function executeTool(toolName, args = {}) {
         extract_reviews: "EXTRACT_REVIEWS",
         extract_ratings: "EXTRACT_RATINGS",
         get_page_context: "GET_PAGE_CONTEXT",
+        get_dom_perception: "GET_DOM_PERCEPTION",
+        get_readable_page: "GET_READABLE_PAGE",
         get_page_text: "GET_PAGE_TEXT",
+        parse_local_command: "PARSE_LOCAL_COMMAND",
         get_links: "GET_LINKS",
         get_search_results: "GET_SEARCH_RESULTS",
         get_buttons: "GET_BUTTONS",
@@ -1898,10 +2498,15 @@ async function executeTool(toolName, args = {}) {
         get_headings: "GET_HEADINGS",
         get_images: "GET_IMAGES",
         find_text_on_page: "FIND_TEXT",
+        find_on_page: "FIND_TEXT",
+        scroll_to_text: "SCROLL_TO_TEXT",
+        highlight_text: "HIGHLIGHT_TEXT",
+        open_link_by_text: "CLICK_LINK",
         click_text: "CLICK_TEXT",
         click_link: "CLICK_LINK",
         click_button: "CLICK_BUTTON",
         click_input: "CLICK_INPUT",
+        click_element: "CLICK_ELEMENT",
         hover_text: "HOVER_TEXT",
         double_click_text: "DOUBLE_CLICK_TEXT",
         scroll_down: "SCROLL_DOWN",
@@ -1911,21 +2516,34 @@ async function executeTool(toolName, args = {}) {
         press_enter: "PRESS_ENTER",
         press_key: "PRESS_KEY",
         type_text: "TYPE_TEXT",
+        type_into_element: "TYPE_INTO_ELEMENT",
         clear_input: "CLEAR_INPUT",
         paste_text: "PASTE_TEXT",
+        select_all: "SELECT_ALL",
         select_dropdown: "SELECT_DROPDOWN",
         check_checkbox: "CHECK_CHECKBOX",
         uncheck_checkbox: "UNCHECK_CHECKBOX",
         extract_emails: "EXTRACT_EMAILS",
         extract_phone_numbers: "EXTRACT_PHONE_NUMBERS",
+        extract_links: "EXTRACT_LINKS",
+        extract_buttons: "EXTRACT_BUTTONS",
+        extract_inputs: "EXTRACT_INPUTS",
+        extract_headings: "EXTRACT_HEADINGS",
+        extract_readable_page: "EXTRACT_READABLE_PAGE",
+        extract_table: "EXTRACT_TABLE",
         extract_dates: "EXTRACT_DATES",
+        extract_jobs: "EXTRACT_JOBS",
+        extract_courses: "EXTRACT_COURSES",
+        extract_events: "EXTRACT_EVENTS",
+        extract_contact_info: "EXTRACT_CONTACT_INFO",
         extract_prices: "EXTRACT_PRICES",
         youtube_open_first_video: "YOUTUBE_OPEN_FIRST",
         youtube_play_pause: "YOUTUBE_PLAY_PAUSE",
         youtube_fullscreen: "YOUTUBE_FULLSCREEN",
         youtube_change_speed: "YOUTUBE_CHANGE_SPEED",
         youtube_skip_forward: "YOUTUBE_SKIP_FORWARD",
-        youtube_skip_back: "YOUTUBE_SKIP_BACK"
+        youtube_skip_back: "YOUTUBE_SKIP_BACK",
+        ocr_image_text: "OCR_IMAGE_TEXT"
       };
 
       if (["click_link", "click_text", "click_button", "click_input"].includes(toolName)) {
@@ -1933,6 +2551,12 @@ async function executeTool(toolName, args = {}) {
         if (invalid) return invalid;
       }
 
+      if (toolName === "open_link_by_text" && args.text && !args.target) {
+        args = { ...args, target: args.text };
+      }
+      if ((toolName === "find_on_page" || toolName === "find_text_on_page") && args.text && !args.query) {
+        args = { ...args, query: args.text };
+      }
       const mappedType = typeMap[toolName];
       if (!mappedType) {
         throw new Error(`Tool "${toolName}" is not approved or implemented.`);

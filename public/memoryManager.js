@@ -13,6 +13,12 @@ const SIDEKICK_MEMORY_DEFAULT = {
   },
   interactionPatterns: {},
   recentCommands: [],
+  researchSessions: [],
+  shoppingSessions: [],
+  openWorkflows: [],
+  extractedNotes: [],
+  comparedProducts: [],
+  activeTabs: [],
   learnedBehaviors: []
 };
 
@@ -31,6 +37,12 @@ async function getSidekickMemory() {
     },
     interactionPatterns: stored.sidekickMemory?.interactionPatterns || {},
     recentCommands: stored.sidekickMemory?.recentCommands || [],
+    researchSessions: stored.sidekickMemory?.researchSessions || [],
+    shoppingSessions: stored.sidekickMemory?.shoppingSessions || [],
+    openWorkflows: stored.sidekickMemory?.openWorkflows || [],
+    extractedNotes: stored.sidekickMemory?.extractedNotes || [],
+    comparedProducts: stored.sidekickMemory?.comparedProducts || [],
+    activeTabs: stored.sidekickMemory?.activeTabs || [],
     learnedBehaviors: stored.sidekickMemory?.learnedBehaviors || []
   };
 }

@@ -38,8 +38,20 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "js": ["vendor/sidekick-local-libs.js", "content.js"],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "sidekick_logo.png",
+        "vendor/sidekick-local-libs.js",
+        "vendor/tesseract/worker.min.js",
+        "vendor/tesseract/tesseract-core-lstm.js",
+        "vendor/tesseract/tesseract-core-lstm.wasm"
+      ],
+      "matches": ["<all_urls>"]
     }
   ]
 }

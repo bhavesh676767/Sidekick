@@ -9,12 +9,13 @@ if (!window.__sidekickContentRuntimeLoaded) {
     sidekickEnabled: false,
     notchPosition: { x: null, y: null },
     notchCollapsed: true,
-    voiceEnabled: true,
-    voiceMode: "manual",
+    voiceEnabled: false,
+    voiceMode: "text",
     wakeWord: "sidekick",
-    autoSpeak: true,
+    autoSpeak: false,
     speechRate: 1,
-    lastState: "idle"
+    lastState: "idle",
+    sidekickTheme: "light"
   };
 
   const SIDEKICK_IDS = {
@@ -29,18 +30,17 @@ if (!window.__sidekickContentRuntimeLoaded) {
     { label: "Search web", command: "google search " }
   ];
 
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-
   let uiState = {
     sidekickEnabled: false,
     notchPosition: { x: null, y: null },
     notchCollapsed: true,
-    voiceEnabled: true,
-    voiceMode: "manual",
+    voiceEnabled: false,
+    voiceMode: "text",
     wakeWord: "sidekick",
-    autoSpeak: true,
+    autoSpeak: false,
     speechRate: 1,
-    lastState: "idle"
+    lastState: "idle",
+    sidekickTheme: "light"
   };
 
   let agentState = {
@@ -62,15 +62,8 @@ if (!window.__sidekickContentRuntimeLoaded) {
 
   let rootEl = null;
   let currentTranscript = "";
-  let speechRecognition = null;
-  let speechStarting = false;
-  let speechListening = false;
-  let speechShouldRestart = false;
-  let speechRestartTimer = null;
-  let awaitingWakeCommand = false;
-  let lastHeardTranscript = "";
-  let lastHeardAt = 0;
   let dragState = null;
+  let clockTimer = null;
   let assistTipState = {
     loaded: false,
     dismissedFormTooltipSites: [],
@@ -150,6 +143,21 @@ if (!window.__sidekickContentRuntimeLoaded) {
 
   function findBestMatch(elements, targetText) {
     if (!targetText) return null;
+    const records = elements
+      .filter(isElementVisible)
+      .map((el) => ({
+        el,
+        text: (el.innerText || el.value || "").trim(),
+        ariaLabel: el.getAttribute("aria-label") || "",
+        placeholder: el.getAttribute("placeholder") || "",
+        title: el.getAttribute("title") || "",
+        label: getElementTextSignature(el),
+        id: el.id || "",
+        sidekickId: el.getAttribute("data-sidekick-id") || ""
+      }));
+    const fuzzyMatch = window.SidekickLibs?.fuzzyFind?.(records, targetText, ["text", "ariaLabel", "placeholder", "title", "label", "id", "sidekickId"]);
+    if (fuzzyMatch?.el) return fuzzyMatch.el;
+
     const target = targetText.toLowerCase().trim();
     let bestElement = null;
     let bestScore = -1;
@@ -222,6 +230,121 @@ if (!window.__sidekickContentRuntimeLoaded) {
       links: Array.from(document.querySelectorAll("a")).filter(isElementVisible).slice(0, 20).map((el) => getCompactAttributes(el, "link")),
       inputs: Array.from(document.querySelectorAll("input:not([type='hidden']), textarea, [contenteditable='true']")).filter(isElementVisible).slice(0, 12).map((el) => getCompactAttributes(el, "input")),
       headings: Array.from(document.querySelectorAll("h1, h2, h3, h4")).filter(isElementVisible).slice(0, 10).map((el) => ({ tag: el.tagName.toLowerCase(), text: el.innerText.trim().substring(0, 60) }))
+    };
+  }
+
+  function getReadablePage() {
+    const readable = window.SidekickLibs?.parseReadableDocument?.(document);
+    if (readable?.textContent) {
+      return {
+        ...readable,
+        url: window.location.href
+      };
+    }
+    return {
+      title: document.title,
+      url: window.location.href,
+      textContent: (document.body?.innerText || "").replace(/\s+/g, " ").trim().substring(0, 12000),
+      excerpt: ""
+    };
+  }
+
+  function getElementRole(el) {
+    const explicitRole = el.getAttribute("role");
+    if (explicitRole) return explicitRole;
+    const tag = el.tagName.toLowerCase();
+    const type = (el.type || "").toLowerCase();
+    if (tag === "button" || type === "button" || type === "submit") return "button";
+    if (tag === "a") return "link";
+    if (tag === "select") return "combobox";
+    if (tag === "textarea") return "textbox";
+    if (tag === "input") {
+      if (type === "checkbox") return "checkbox";
+      if (type === "radio") return "radio";
+      if (type === "search") return "searchbox";
+      return "textbox";
+    }
+    if (el.hasAttribute("contenteditable")) return "textbox";
+    if (/^h[1-6]$/.test(tag)) return "heading";
+    return tag;
+  }
+
+  function getElementTextSignature(el) {
+    const parts = [
+      el.innerText,
+      el.value,
+      el.placeholder,
+      el.getAttribute("aria-label"),
+      el.getAttribute("title"),
+      el.getAttribute("alt"),
+      el.name,
+      el.id
+    ];
+    if (el.id) {
+      const label = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      if (label?.innerText) parts.push(label.innerText);
+    }
+    const wrappingLabel = el.closest("label");
+    if (wrappingLabel?.innerText) parts.push(wrappingLabel.innerText);
+    return [...new Set(parts.filter(Boolean).map((part) => String(part).replace(/\s+/g, " ").trim()))].join(" | ").substring(0, 180);
+  }
+
+  function getDomPerception() {
+    const selectors = [
+      "a[href]",
+      "button",
+      "[role='button']",
+      "[role='link']",
+      "input:not([type='hidden'])",
+      "textarea",
+      "select",
+      "[contenteditable='true']",
+      "[tabindex]",
+      "summary",
+      "label",
+      "h1",
+      "h2",
+      "h3",
+      "h4"
+    ].join(",");
+    const viewport = { width: window.innerWidth, height: window.innerHeight, scrollX: window.scrollX, scrollY: window.scrollY };
+    const elements = Array.from(document.querySelectorAll(selectors))
+      .filter(isElementVisible)
+      .slice(0, 180)
+      .map((el) => {
+        const rect = el.getBoundingClientRect();
+        const id = getOrAssignSidekickId(el);
+        const role = getElementRole(el);
+        const tag = el.tagName.toLowerCase();
+        const type = (el.type || "").toLowerCase();
+        return {
+          id,
+          tag,
+          role,
+          type,
+          text: getElementTextSignature(el),
+          placeholder: el.placeholder || "",
+          ariaLabel: el.getAttribute("aria-label") || "",
+          title: el.getAttribute("title") || "",
+          href: el.href || "",
+          enabled: !el.disabled && el.getAttribute("aria-disabled") !== "true",
+          checked: Boolean(el.checked),
+          bounds: {
+            x: Math.round(rect.left),
+            y: Math.round(rect.top),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+            centerX: Math.round(rect.left + rect.width / 2),
+            centerY: Math.round(rect.top + rect.height / 2)
+          }
+        };
+      });
+    return {
+      url: window.location.href,
+      title: document.title,
+      viewport,
+      elements,
+      note: "DOM perception only. No screenshot or paid vision model was used."
     };
   }
 
@@ -313,7 +436,7 @@ if (!window.__sidekickContentRuntimeLoaded) {
     if (!uiState.sidekickEnabled || agentState.isRunning || agentState.askUserQuestion) return;
     const site = getSiteKey();
     if (!assistTipState.dismissedFormTooltipSites.includes(site) && detectFormSummary().hasForm) {
-      assistTipState.activeTip = { kind: "form", text: "Fill this with voice?", command: "Fill this form" };
+      assistTipState.activeTip = { kind: "form", text: "Need help filling this?", command: "Fill this form" };
     } else if (!assistTipState.dismissedWritingTooltipSites.includes(site) && detectWritingSurface().hasWritingSurface) {
       assistTipState.activeTip = { kind: "writing", text: /mail\.google|linkedin|reddit|x\.com|twitter/.test(location.hostname) ? "Need a better reply?" : "Want help writing?", command: "Help me write here" };
     } else {
@@ -432,7 +555,7 @@ if (!window.__sidekickContentRuntimeLoaded) {
       const priceEl = card.querySelector(".a-price-whole, .a-price, .price, [class*='price' i], .s-item__price");
       if (priceEl) price = priceEl.innerText.trim().replace(/\n/g, ".");
       else {
-        const match = card.innerText.match(/\$\d+(?:\.\d{2})?/);
+        const match = card.innerText.match(/(?:₹|\$|Rs\.?|INR)\s*[\d,.]+(?:\.\d{1,2})?/i);
         if (match) price = match[0];
       }
       if (!price) continue;
@@ -450,7 +573,8 @@ if (!window.__sidekickContentRuntimeLoaded) {
       const imgEl = card.querySelector("img.s-image, img.product-image, img");
       const url = linkEl ? new URL(linkEl.getAttribute("href"), window.location.href).href : "";
       const id = linkEl ? getOrAssignSidekickId(linkEl) : getOrAssignSidekickId(card);
-      const priceValue = parsePriceToNumber(price);
+      const priceInfo = window.SidekickLibs?.normalizePrice?.(price) || {};
+      const priceValue = Number.isFinite(priceInfo.value) ? priceInfo.value : parsePriceToNumber(price);
       const ratingValue = parseFloat(String(rating || "").match(/[\d.]+/)?.[0] || "0");
       const reviewsCount = parseInt(String(reviewsEl ? reviewsEl.innerText : "").replace(/[^\d]/g, ""), 10) || 0;
 
@@ -471,7 +595,7 @@ if (!window.__sidekickContentRuntimeLoaded) {
       });
     }
 
-    return products.slice(0, 15);
+    return (window.SidekickLibs?.rankProducts?.(products, document.title) || products).slice(0, 20);
   }
 
   function extractSearchResults() {
@@ -510,6 +634,8 @@ if (!window.__sidekickContentRuntimeLoaded) {
 
   function parsePriceToNumber(priceStr) {
     if (!priceStr) return Infinity;
+    const normalized = window.SidekickLibs?.normalizePrice?.(priceStr);
+    if (Number.isFinite(normalized?.value)) return normalized.value;
     const clean = priceStr.replace(/[^\d.]/g, "");
     const parsed = parseFloat(clean);
     return isNaN(parsed) ? Infinity : parsed;
@@ -526,7 +652,8 @@ if (!window.__sidekickContentRuntimeLoaded) {
       wakeWord: stored.wakeWord || SIDEKICK_STORAGE_DEFAULTS.wakeWord,
       autoSpeak: stored.autoSpeak ?? SIDEKICK_STORAGE_DEFAULTS.autoSpeak,
       speechRate: stored.speechRate || SIDEKICK_STORAGE_DEFAULTS.speechRate,
-      lastState: stored.lastState || SIDEKICK_STORAGE_DEFAULTS.lastState
+      lastState: stored.lastState || SIDEKICK_STORAGE_DEFAULTS.lastState,
+      sidekickTheme: stored.sidekickTheme || SIDEKICK_STORAGE_DEFAULTS.sidekickTheme
     };
   }
 
@@ -541,7 +668,7 @@ if (!window.__sidekickContentRuntimeLoaded) {
         top: 0;
         z-index: 2147483647;
         font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        color: #fff;
+        color: #171711;
       }
       #${SIDEKICK_IDS.root} * { box-sizing: border-box; }
       .sk-notch-shell {
@@ -549,11 +676,9 @@ if (!window.__sidekickContentRuntimeLoaded) {
         min-width: 56px;
         min-height: 56px;
         border-radius: 999px;
-        background:
-          radial-gradient(circle at top, rgba(255,255,255,0.14), transparent 52%),
-          linear-gradient(180deg, rgba(20,20,20,0.98), rgba(3,3,3,0.98));
-        border: 1px solid rgba(255,255,255,0.14);
-        box-shadow: 0 16px 40px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.08);
+        background: #fffdf6;
+        border: 1px solid rgba(32,30,22,0.12);
+        box-shadow: 0 16px 34px rgba(47,43,31,0.14);
         backdrop-filter: blur(18px);
         display: flex;
         flex-direction: column;
@@ -561,13 +686,19 @@ if (!window.__sidekickContentRuntimeLoaded) {
         overflow: hidden;
         user-select: none;
       }
+      .sk-theme-dark .sk-notch-shell {
+        background: #23231f;
+        border-color: rgba(255,255,255,0.10);
+        box-shadow: 0 18px 38px rgba(0,0,0,0.34);
+        color: #f5f1e7;
+      }
       .sk-notch-shell.sk-collapsed {
         width: 56px;
         height: 56px;
       }
       .sk-notch-shell.sk-expanded {
         width: 320px;
-        border-radius: 22px;
+        border-radius: 26px;
       }
       .sk-notch-pill {
         width: 56px;
@@ -577,14 +708,15 @@ if (!window.__sidekickContentRuntimeLoaded) {
         place-items: center;
         cursor: grab;
         position: relative;
-        color: #fff;
+        color: #11120a;
+        background: #dfff14;
       }
       .sk-notch-pill:active { cursor: grabbing; }
       .sk-notch-state-ring {
         position: absolute;
         inset: 7px;
         border-radius: 999px;
-        border: 1px solid rgba(255,255,255,0.1);
+        border: 1px solid rgba(17,18,10,0.12);
       }
       .sk-notch-pill.sk-listening .sk-notch-state-ring,
       .sk-notch-pill.sk-speaking .sk-notch-state-ring {
@@ -605,60 +737,85 @@ if (!window.__sidekickContentRuntimeLoaded) {
       }
       .sk-notch-title {
         font-size: 11px;
-        letter-spacing: 0.22em;
+        letter-spacing: 0.16em;
         text-transform: uppercase;
-        color: rgba(255,255,255,0.5);
+        color: rgba(23,23,17,0.46);
+        font-weight: 900;
       }
+      .sk-theme-dark .sk-notch-title { color: rgba(245,241,231,0.50); }
       .sk-notch-status {
         font-size: 10px;
-        color: rgba(255,255,255,0.78);
+        color: rgba(23,23,17,0.70);
+        font-weight: 800;
       }
+      .sk-theme-dark .sk-notch-status { color: rgba(245,241,231,0.76); }
       .sk-notch-close {
         border: 0;
-        background: rgba(255,255,255,0.06);
-        color: rgba(255,255,255,0.65);
+        background: rgba(23,23,17,0.08);
+        color: rgba(23,23,17,0.72);
         width: 28px;
         height: 28px;
         border-radius: 999px;
         cursor: pointer;
       }
+      .sk-theme-dark .sk-notch-close { background: rgba(255,255,255,0.08); color: rgba(245,241,231,0.75); }
       .sk-notch-transcript,
       .sk-notch-response {
-        border-radius: 16px;
-        background: rgba(255,255,255,0.05);
-        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 18px;
+        background: rgba(236,230,214,0.68);
+        border: 1px solid rgba(32,30,22,0.10);
         padding: 10px 12px;
         font-size: 12px;
         line-height: 1.45;
-        color: rgba(255,255,255,0.88);
+        color: rgba(23,23,17,0.86);
+        font-weight: 650;
+      }
+      .sk-theme-dark .sk-notch-transcript,
+      .sk-theme-dark .sk-notch-response {
+        background: rgba(255,255,255,0.06);
+        border-color: rgba(255,255,255,0.08);
+        color: rgba(245,241,231,0.88);
       }
       .sk-notch-transcript {
         min-height: 46px;
-        color: rgba(255,255,255,0.64);
+        color: rgba(23,23,17,0.58);
       }
+      .sk-theme-dark .sk-notch-transcript { color: rgba(245,241,231,0.58); }
       .sk-notch-response {
         min-height: 58px;
+        max-height: 180px;
+        overflow-y: auto;
       }
       .sk-notch-input-row {
         display: grid;
         grid-template-columns: 1fr auto auto;
         gap: 8px;
       }
+      .sk-notch-input-row-text {
+        grid-template-columns: 1fr auto;
+      }
       .sk-notch-input {
         width: 100%;
-        border-radius: 14px;
-        border: 1px solid rgba(255,255,255,0.08);
-        background: rgba(255,255,255,0.04);
-        color: #fff;
+        border-radius: 16px;
+        border: 1px solid rgba(32,30,22,0.12);
+        background: #f6f1e6;
+        color: #171711;
         padding: 10px 12px;
         outline: none;
         font-size: 12px;
+        font-weight: 700;
       }
-      .sk-notch-input::placeholder { color: rgba(255,255,255,0.28); }
+      .sk-theme-dark .sk-notch-input {
+        background: #171714;
+        border-color: rgba(255,255,255,0.10);
+        color: #f5f1e7;
+      }
+      .sk-notch-input::placeholder { color: rgba(23,23,17,0.34); }
+      .sk-theme-dark .sk-notch-input::placeholder { color: rgba(245,241,231,0.28); }
       .sk-notch-btn {
         border: 0;
         cursor: pointer;
-        border-radius: 14px;
+        border-radius: 16px;
         padding: 0 12px;
         min-width: 42px;
         min-height: 42px;
@@ -666,25 +823,33 @@ if (!window.__sidekickContentRuntimeLoaded) {
         align-items: center;
         justify-content: center;
         font-size: 12px;
+        font-weight: 900;
         transition: transform 120ms ease, background 120ms ease, opacity 120ms ease;
       }
       .sk-notch-btn:active { transform: scale(0.97); }
       .sk-notch-btn:disabled { opacity: 0.35; cursor: default; }
-      .sk-notch-btn-primary { background: #fff; color: #000; }
-      .sk-notch-btn-secondary { background: rgba(255,255,255,0.06); color: #fff; }
+      .sk-notch-btn-primary { background: #dfff14; color: #11120a; }
+      .sk-notch-btn-secondary { background: rgba(23,23,17,0.08); color: #171711; }
+      .sk-theme-dark .sk-notch-btn-secondary { background: rgba(255,255,255,0.08); color: #f5f1e7; }
       .sk-notch-quick {
         display: flex;
         flex-wrap: wrap;
         gap: 6px;
       }
       .sk-notch-chip {
-        border: 1px solid rgba(255,255,255,0.08);
-        background: rgba(255,255,255,0.04);
-        color: rgba(255,255,255,0.7);
+        border: 1px solid rgba(32,30,22,0.10);
+        background: rgba(236,230,214,0.70);
+        color: rgba(23,23,17,0.74);
         border-radius: 999px;
         padding: 7px 10px;
         font-size: 10px;
+        font-weight: 850;
         cursor: pointer;
+      }
+      .sk-theme-dark .sk-notch-chip {
+        border-color: rgba(255,255,255,0.08);
+        background: rgba(255,255,255,0.07);
+        color: rgba(245,241,231,0.78);
       }
       .sk-assist-tip {
         position: absolute;
@@ -728,8 +893,10 @@ if (!window.__sidekickContentRuntimeLoaded) {
       }
       .sk-notch-mini {
         font-size: 10px;
-        color: rgba(255,255,255,0.38);
+        color: rgba(23,23,17,0.42);
+        font-weight: 800;
       }
+      .sk-theme-dark .sk-notch-mini { color: rgba(245,241,231,0.42); }
       .sk-wave {
         display: inline-flex;
         align-items: center;
@@ -797,233 +964,13 @@ if (!window.__sidekickContentRuntimeLoaded) {
   }
 
   function stopSpeaking() {
-    if ("speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
-    }
   }
 
-  function speakResponse(text) {
-    if (!uiState.voiceEnabled || uiState.voiceMode === "text" || !uiState.autoSpeak || !text || !("speechSynthesis" in window)) return;
-    stopSpeaking();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = Number(uiState.speechRate || 1);
-    utterance.onstart = () => {
-      voiceState.mode = "speaking";
-      renderNotch();
-    };
-    utterance.onend = () => {
-      if (voiceState.mode === "speaking") {
-        voiceState.mode = "idle";
-        renderNotch();
-      }
-    };
-    utterance.onerror = () => {
-      voiceState.mode = "error";
-      voiceState.error = "I couldn't speak that.";
-      renderNotch();
-    };
-    window.speechSynthesis.speak(utterance);
-  }
-
-  function clearSpeechRestartTimer() {
-    if (speechRestartTimer) {
-      clearTimeout(speechRestartTimer);
-      speechRestartTimer = null;
-    }
-  }
-
-  function scheduleWakeRestart() {
-    clearSpeechRestartTimer();
-    speechRestartTimer = setTimeout(() => {
-      if (speechShouldRestart && uiState.voiceMode === "wake_word" && uiState.voiceEnabled) {
-        startListening("wake_word");
-      }
-    }, 500);
-  }
-
-  function normalizeSpeech(text) {
-    return String(text || "").toLowerCase().trim().replace(/\s+/g, " ");
-  }
-
-  function isDuplicateSpeech(text) {
-    const normalized = normalizeSpeech(text);
-    const now = Date.now();
-    if (normalized === lastHeardTranscript && now - lastHeardAt < 2500) return true;
-    lastHeardTranscript = normalized;
-    lastHeardAt = now;
+  function speakResponse(text, options = {}) {
     return false;
   }
 
-  function ensureSpeechRecognition() {
-    if (!SpeechRecognition) return null;
-    if (speechRecognition) return speechRecognition;
-
-    speechRecognition = new SpeechRecognition();
-    speechRecognition.lang = "en-US";
-    speechRecognition.continuous = true;
-    speechRecognition.interimResults = true;
-    speechRecognition.maxAlternatives = 1;
-
-    speechRecognition.onstart = () => {
-      speechStarting = false;
-      speechListening = true;
-      voiceState.mode = uiState.voiceMode === "wake_word" && !awaitingWakeCommand ? "wake_listening" : "listening";
-      voiceState.error = null;
-      renderNotch();
-      chrome.runtime.sendMessage({ action: "VOICE_STATE", voiceState: { mode: voiceState.mode, error: null } });
-    };
-
-    speechRecognition.onresult = (event) => {
-      let interim = "";
-      let finalTranscript = "";
-      for (let i = event.resultIndex; i < event.results.length; i += 1) {
-        const text = String(event.results[i][0]?.transcript || "").trim();
-        if (!text) continue;
-        if (event.results[i].isFinal) finalTranscript += `${text} `;
-        else interim += `${text} `;
-      }
-      currentTranscript = (finalTranscript || interim).trim();
-      voiceState.transcript = currentTranscript;
-      renderNotch();
-
-      if (finalTranscript.trim()) {
-        const heard = finalTranscript.trim();
-        if (isDuplicateSpeech(heard)) return;
-        if (uiState.voiceMode === "wake_word") {
-          const normalized = normalizeSpeech(heard);
-          const normalizedWakeWord = normalizeSpeech(uiState.wakeWord || "sidekick");
-          if (normalized.includes(normalizedWakeWord)) {
-            const wakeIndex = normalized.indexOf(normalizedWakeWord);
-            const afterWake = normalized.slice(wakeIndex + normalizedWakeWord.length).trim();
-            if (afterWake) {
-              speechShouldRestart = false;
-              stopListening(true);
-              voiceState.mode = "processing";
-              voiceState.transcript = afterWake;
-              renderNotch();
-              handleVoiceTranscript(afterWake);
-              return;
-            }
-            awaitingWakeCommand = true;
-            speechShouldRestart = false;
-            stopListening(true);
-            voiceState.mode = "listening";
-            voiceState.lastResponse = "Listening.";
-            renderNotch();
-            setTimeout(() => startListening("manual"), 250);
-            return;
-          }
-          if (awaitingWakeCommand) {
-            awaitingWakeCommand = false;
-            speechShouldRestart = false;
-            stopListening(true);
-            voiceState.mode = "processing";
-            voiceState.transcript = heard;
-            renderNotch();
-            handleVoiceTranscript(heard);
-          }
-          return;
-        }
-
-        speechShouldRestart = false;
-        stopListening(true);
-        voiceState.mode = "processing";
-        renderNotch();
-        handleVoiceTranscript(heard);
-      }
-    };
-
-    speechRecognition.onend = () => {
-      speechStarting = false;
-      speechListening = false;
-      if (speechShouldRestart && uiState.voiceMode === "wake_word" && uiState.voiceEnabled) {
-        scheduleWakeRestart();
-        return;
-      }
-      if (voiceState.mode === "listening" || voiceState.mode === "wake_listening") {
-        voiceState.mode = "idle";
-        renderNotch();
-      }
-    };
-
-    speechRecognition.onerror = (event) => {
-      speechStarting = false;
-      speechListening = false;
-      if (event.error === "already-started") return;
-      if (event.error === "aborted") {
-        if (speechShouldRestart && uiState.voiceMode === "wake_word") scheduleWakeRestart();
-        return;
-      }
-      if (event.error === "no-speech") {
-        if (uiState.voiceMode === "wake_word") {
-          scheduleWakeRestart();
-          return;
-        }
-        voiceState.mode = "idle";
-        renderNotch();
-        return;
-      }
-      if (event.error === "network") {
-        uiState.voiceMode = "text";
-        chrome.runtime.sendMessage({ action: "SAVE_VOICE_PREFERENCES", preferences: { voiceMode: "text" } });
-        voiceState.mode = "error";
-        voiceState.error = "Voice is not supported in this browser.";
-        renderNotch();
-        return;
-      }
-      voiceState.mode = "error";
-      voiceState.error = event.error === "not-allowed" ? "Microphone permission is blocked." : "I couldn't hear that.";
-      renderNotch();
-    };
-
-    return speechRecognition;
-  }
-
-  function startListening(modeOverride) {
-    if (uiState.voiceMode === "text") return;
-    stopSpeaking();
-    const recognition = ensureSpeechRecognition();
-    if (!recognition) {
-      voiceState.mode = "error";
-      voiceState.error = "Voice is not supported in this browser.";
-      renderNotch();
-      return;
-    }
-    if (speechListening || speechStarting) return;
-    const mode = modeOverride || uiState.voiceMode || "manual";
-    clearSpeechRestartTimer();
-    speechShouldRestart = mode === "wake_word";
-    recognition.continuous = mode === "wake_word";
-    voiceState.error = null;
-    voiceState.transcript = "";
-    currentTranscript = "";
-    speechStarting = true;
-    try {
-      recognition.start();
-    } catch (err) {
-      speechStarting = false;
-      if (!/already started/i.test(err.message || "")) {
-        voiceState.mode = "error";
-        voiceState.error = "Try again.";
-        renderNotch();
-      }
-    }
-  }
-
   function stopListening(silent) {
-    clearSpeechRestartTimer();
-    speechShouldRestart = false;
-    if (!speechRecognition) return;
-    try {
-      speechRecognition.stop();
-    } catch (err) {
-      // Ignore stale stop calls.
-    }
-    if (!silent) {
-      awaitingWakeCommand = false;
-      voiceState.mode = "idle";
-      renderNotch();
-    }
   }
 
   function handleVoiceTranscript(text) {
@@ -1077,13 +1024,35 @@ if (!window.__sidekickContentRuntimeLoaded) {
     return `<span class="sk-wave"><span></span><span></span><span></span><span></span></span>`;
   }
 
+  function escapeHtml(value) {
+    return String(value || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  function formatNotchTime() {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit"
+    }).format(new Date());
+  }
+
+  function getStatusLabel(stateLabel) {
+    if (agentState.askUserQuestion) return "Asking";
+    if (agentState.result?.text) return "Showing";
+    if (agentState.isRunning || voiceState.mode === "processing") return "Working";
+    if (voiceState.mode === "error") return "Needs help";
+    return stateLabel === "Idle" ? "Idle" : stateLabel;
+  }
+
   function createStateIcon() {
     const mode = voiceState.mode;
-    if (mode === "listening" || mode === "speaking") return createWaveMarkup();
-    if (mode === "wake_listening") return `<span style="width:10px;height:10px;border-radius:999px;background:#fff;opacity:.7;box-shadow:0 0 0 6px rgba(255,255,255,.08)"></span>`;
     if (mode === "processing" || agentState.isRunning) return `<span class="sk-dot-loader"><span></span><span></span><span></span></span>`;
     if (mode === "error") return `<span style="font-size:16px;">!</span>`;
-    return `<span style="font-size:17px;font-weight:700;">S</span>`;
+    return `<img src="${chrome.runtime.getURL("sidekick_logo.png")}" alt="" style="width:30px;height:30px;border-radius:999px;object-fit:cover;" />`;
   }
 
   function renderNotch() {
@@ -1114,13 +1083,14 @@ if (!window.__sidekickContentRuntimeLoaded) {
             ? "Error"
             : "Idle";
 
+    const themeClass = uiState.sidekickTheme === "dark" ? "sk-theme-dark" : "sk-theme-light";
     rootEl.innerHTML = `
-      <div class="sk-notch-shell ${collapsed ? "sk-collapsed" : "sk-expanded"}">
+      <div class="sk-notch-shell ${themeClass} ${collapsed ? "sk-collapsed" : "sk-expanded"}">
         ${assistTipState.activeTip && collapsed ? `
           <div class="sk-assist-tip">
             <span>${assistTipState.activeTip.text}</span>
             <button data-sk-tip-action="accept">Yes</button>
-            <button data-sk-tip-action="dismiss" aria-label="Dismiss">×</button>
+            <button data-sk-tip-action="dismiss" aria-label="Dismiss">&times;</button>
           </div>
         ` : ""}
         ${collapsed ? "" : `
@@ -1134,14 +1104,13 @@ if (!window.__sidekickContentRuntimeLoaded) {
           <div class="sk-notch-panel">
             <div class="sk-notch-transcript">${transcript || "Talk or type naturally."}</div>
             <div class="sk-notch-response">${responseText || "Ready."}</div>
-            <div class="sk-notch-input-row">
+            <div class="sk-notch-input-row sk-notch-input-row-text">
               <input class="sk-notch-input" data-sk-input="command" placeholder="${agentState.askUserQuestion ? "Answer Sidekick..." : "Ask Sidekick..."}" />
-              <button class="sk-notch-btn sk-notch-btn-secondary" data-sk-action="mic" aria-label="Start voice">${voiceState.mode === "listening" ? "■" : "◉"}</button>
               <button class="sk-notch-btn sk-notch-btn-primary" data-sk-action="send" aria-label="Send command">→</button>
             </div>
             <div class="sk-notch-footer">
-              <div class="sk-notch-mini">Mode: ${uiState.voiceMode.replace("_", " ")}</div>
-              <div class="sk-notch-mini">${uiState.voiceMode === "wake_word" ? `Wake: ${uiState.wakeWord}` : uiState.voiceMode === "text" ? "Typing only" : "Mic on demand"}</div>
+              <div class="sk-notch-mini">Prompt mode</div>
+              <div class="sk-notch-mini">${/Windows/i.test(navigator.userAgent) ? "Windows + H for dictation" : "Typing only"}</div>
             </div>
             <div class="sk-notch-quick">
               ${QUICK_ACTIONS.map((item) => `<button class="sk-notch-chip" data-sk-quick="${item.command}">${item.label}</button>`).join("")}
@@ -1163,7 +1132,6 @@ if (!window.__sidekickContentRuntimeLoaded) {
 
     const pill = rootEl.querySelector(".sk-notch-pill");
     const input = rootEl.querySelector("[data-sk-input='command']");
-    const micButton = rootEl.querySelector("[data-sk-action='mic']");
     const sendButton = rootEl.querySelector("[data-sk-action='send']");
     const stopButton = rootEl.querySelector("[data-sk-action='stop']");
     const collapseButton = rootEl.querySelector("[data-sk-action='collapse']");
@@ -1196,11 +1164,6 @@ if (!window.__sidekickContentRuntimeLoaded) {
           }
         });
       }
-      if (micButton) micButton.addEventListener("click", () => {
-        if (uiState.voiceMode === "text") return;
-        if (voiceState.mode === "listening" || voiceState.mode === "wake_listening") stopListening();
-        else startListening(uiState.voiceMode);
-      });
       if (sendButton) sendButton.addEventListener("click", () => submitCommand(input ? input.value : ""));
       if (stopButton) stopButton.addEventListener("click", () => {
         if (agentState.isRunning) chrome.runtime.sendMessage({ action: "STOP_AGENT" });
@@ -1277,9 +1240,6 @@ if (!window.__sidekickContentRuntimeLoaded) {
     uiState = { ...uiState, ...nextUiState, sidekickEnabled: true };
     renderNotch();
     setTimeout(refreshAssistTip, 700);
-    if (uiState.voiceEnabled && uiState.voiceMode === "wake_word" && !speechListening && !speechStarting) {
-      startListening("wake_word");
-    }
   }
 
   async function initializeNotch() {
@@ -1312,11 +1272,8 @@ if (!window.__sidekickContentRuntimeLoaded) {
     if (changes.wakeWord) uiState.wakeWord = changes.wakeWord.newValue;
     if (changes.autoSpeak) uiState.autoSpeak = changes.autoSpeak.newValue;
     if (changes.speechRate) uiState.speechRate = changes.speechRate.newValue;
-    if (!uiState.voiceEnabled || uiState.voiceMode === "text") {
-      stopListening(true);
-    } else if (uiState.sidekickEnabled && uiState.voiceEnabled && uiState.voiceMode === "wake_word" && !speechListening && !speechStarting) {
-      startListening("wake_word");
-    }
+    if (changes.sidekickTheme) uiState.sidekickTheme = changes.sidekickTheme.newValue;
+    stopListening(true);
     if (uiState.sidekickEnabled) renderNotch();
     else destroyNotch();
   });
@@ -1343,9 +1300,6 @@ if (!window.__sidekickContentRuntimeLoaded) {
 
     if (message?.action === "STATE_UPDATED") {
       agentState = message.state || agentState;
-      if (uiState.sidekickEnabled && uiState.voiceEnabled && uiState.voiceMode === "wake_word" && !agentState.isRunning && !agentState.askUserQuestion && voiceState.mode !== "speaking" && !speechListening && !speechStarting) {
-        startListening("wake_word");
-      }
       if (uiState.sidekickEnabled) {
         renderNotch();
         setTimeout(refreshAssistTip, 500);
@@ -1357,9 +1311,6 @@ if (!window.__sidekickContentRuntimeLoaded) {
     if (message?.action === "VOICE_STATE_UPDATED") {
       const previousResponse = voiceState.lastResponse;
       voiceState = { ...voiceState, ...(message.voiceState || {}) };
-      if (voiceState.lastResponse && voiceState.lastResponse !== previousResponse) {
-        speakResponse(voiceState.lastResponse);
-      }
       if (uiState.sidekickEnabled) renderNotch();
       sendResponse({ success: true });
       return true;
@@ -1457,6 +1408,16 @@ if (!window.__sidekickContentRuntimeLoaded) {
         case "GET_PAGE_CONTEXT":
           sendResponse({ success: true, data: getPageContext() });
           break;
+        case "GET_DOM_PERCEPTION":
+          sendResponse({ success: true, data: getDomPerception() });
+          break;
+        case "GET_READABLE_PAGE":
+        case "EXTRACT_READABLE_PAGE":
+          sendResponse({ success: true, data: getReadablePage() });
+          break;
+        case "PARSE_LOCAL_COMMAND":
+          sendResponse({ success: true, data: window.SidekickLibs?.parseCommand?.(args.command || "") || { intent: "general", topics: [], dates: [] } });
+          break;
         case "GET_PAGE_TEXT":
           sendResponse({ success: true, data: document.body.innerText.substring(0, 8000) });
           break;
@@ -1506,7 +1467,15 @@ if (!window.__sidekickContentRuntimeLoaded) {
           sendResponse({ success: true, data: extractProductCards() });
           break;
         case "EXTRACT_PRICES":
-          sendResponse({ success: true, data: extractProductCards().map((item) => ({ title: item.title, price: item.price })) });
+          sendResponse({
+            success: true,
+            data: extractProductCards().map((item) => ({
+              title: item.title,
+              price: item.price,
+              priceValue: item.priceValue,
+              currency: item.priceCurrency || window.SidekickLibs?.normalizePrice?.(item.price)?.currency || ""
+            }))
+          });
           break;
         case "SORT_ITEMS_BY_PRICE":
           sendResponse({ success: true, data: extractProductCards().sort((a, b) => parsePriceToNumber(a.price) - parsePriceToNumber(b.price)) });
@@ -1523,6 +1492,14 @@ if (!window.__sidekickContentRuntimeLoaded) {
             simulateClick(el);
             sendResponse({ success: true, data: `Clicked: ${args.target}` });
           } else sendResponse({ success: false, error: `Could not click target: "${args.target}"` });
+          break;
+        }
+        case "CLICK_ELEMENT": {
+          const el = getFieldById(args.id);
+          if (el) {
+            simulateClick(el);
+            sendResponse({ success: true, data: `Clicked element: ${args.id}` });
+          } else sendResponse({ success: false, error: `Element not found: "${args.id}"` });
           break;
         }
         case "TYPE_TEXT": {
@@ -1542,6 +1519,16 @@ if (!window.__sidekickContentRuntimeLoaded) {
             el.dispatchEvent(new Event("change", { bubbles: true }));
             sendResponse({ success: true, data: `Typed text in: ${getOrAssignSidekickId(el)}` });
           } else sendResponse({ success: false, error: "No text input found" });
+          break;
+        }
+        case "TYPE_INTO_ELEMENT": {
+          const el = getFieldById(args.id);
+          if (!el) {
+            sendResponse({ success: false, error: `Element not found: "${args.id}"` });
+            break;
+          }
+          setFieldValue(el, args.text || "");
+          sendResponse({ success: true, data: `Typed text in element: ${args.id}` });
           break;
         }
         case "SCROLL_DOWN":
@@ -1717,8 +1704,25 @@ if (!window.__sidekickContentRuntimeLoaded) {
         case "GET_BUTTONS":
           sendResponse({ success: true, data: Array.from(document.querySelectorAll("button, [role='button'], input[type='button'], input[type='submit']")).filter(isElementVisible).slice(0, 30).map((el) => ({ id: getOrAssignSidekickId(el), text: el.innerText.trim().substring(0, 50) })) });
           break;
+        case "EXTRACT_BUTTONS":
+          sendResponse({
+            success: true,
+            data: Array.from(document.querySelectorAll("button, [role='button'], input[type='button'], input[type='submit']"))
+              .filter(isElementVisible)
+              .slice(0, 80)
+              .map((el) => ({
+                id: getOrAssignSidekickId(el),
+                text: (el.innerText || el.value || el.getAttribute("aria-label") || "").trim().substring(0, 100),
+                ariaLabel: el.getAttribute("aria-label") || "",
+                disabled: Boolean(el.disabled || el.getAttribute("aria-disabled") === "true")
+              }))
+          });
+          break;
         case "GET_INPUTS":
           sendResponse({ success: true, data: Array.from(document.querySelectorAll("input:not([type='hidden']), textarea, [contenteditable='true']")).filter(isElementVisible).slice(0, 20).map((el) => ({ id: getOrAssignSidekickId(el), text: (el.innerText || el.value || el.placeholder || "").trim().substring(0, 50), type: el.type || el.tagName.toLowerCase() })) });
+          break;
+        case "EXTRACT_INPUTS":
+          sendResponse({ success: true, data: getFormFields() });
           break;
         case "GET_HEADINGS":
           sendResponse({ success: true, data: Array.from(document.querySelectorAll("h1, h2, h3, h4")).filter(isElementVisible).slice(0, 15).map((el) => ({ tag: el.tagName.toLowerCase(), text: el.innerText.trim().substring(0, 60) })) });
@@ -1817,9 +1821,21 @@ if (!window.__sidekickContentRuntimeLoaded) {
           const text = document.body.innerText;
           const emails = [...new Set(text.match(/[\w.-]+@[\w.-]+\.\w+/g) || [])].slice(0, 20);
           const phones = [...new Set(text.match(/[\+]?[(]?[0-9]{1,3}[)]?[-\s.]?[(]?[0-9]{1,4}[)]?[-\s.]?[0-9]{3,6}[-\s.]?[0-9]{3,6}/g) || [])].slice(0, 20);
+          const detected = window.SidekickLibs?.extractLinkified?.(text).filter((item) => item.type === "email" || item.type === "url").slice(0, 40) || [];
           const links = Array.from(document.querySelectorAll("a[href]")).filter(isElementVisible).filter((el) => /contact|mailto:|linkedin|twitter|x\.com|instagram/i.test(el.href + " " + el.innerText)).slice(0, 30).map((el) => ({ text: el.innerText.trim(), href: el.href }));
-          sendResponse({ success: true, data: { emails, phones, links } });
+          sendResponse({ success: true, data: { emails, phones, links, detected } });
           break;
+        }
+        case "OCR_IMAGE_TEXT": {
+          const targetImage = args.src
+            ? Array.from(document.querySelectorAll("img")).find((img) => img.src === args.src || img.src.includes(args.src))
+            : Array.from(document.querySelectorAll("img")).filter(isElementVisible)[0];
+          if (!targetImage?.src) {
+            sendResponse({ success: false, error: "No visible image found for OCR" });
+            break;
+          }
+          window.SidekickLibs?.ocrImage?.(targetImage.src).then(sendResponse);
+          return true;
         }
         case "SELECT_ALL":
           document.execCommand("selectAll");

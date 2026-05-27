@@ -1,66 +1,111 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  Check,
+  ChevronRight,
   Cpu,
   Eye,
   EyeOff,
   Loader2,
-  Mic,
+  Moon,
   Settings,
   Sparkles,
-  Volume2,
+  Sun,
   X
 } from "lucide-react";
 
 import SidekickNotch from "./notch/SidekickNotch";
 
-const DEFAULT_VOICE_SETTINGS = {
-  voiceEnabled: true,
-  voiceMode: "manual",
+const chromeApi = (typeof chrome !== "undefined" && chrome?.runtime?.sendMessage && chrome?.storage?.local) ? chrome : {
+  storage: {
+    local: {
+      get: async () => ({}),
+      set: async () => {}
+    }
+  },
+  runtime: {
+    sendMessage: (_message, callback) => callback?.({ success: true, ui: {}, active: false, state: { logs: [] }, voiceState: {} }),
+    onMessage: {
+      addListener: () => {},
+      removeListener: () => {}
+    }
+  }
+};
+
+const DEFAULT_SETTINGS = {
+  voiceEnabled: false,
+  voiceMode: "text",
   wakeWord: "sidekick",
-  autoSpeak: true,
+  autoSpeak: false,
   preferredVoice: "",
   speechRate: 1,
   muted: false,
   memoryLearning: true
 };
 
-function ToggleRow({ label, hint, value, onChange, disabled = false }) {
+const THEME = {
+  light: {
+    app: "bg-[#f7f4ea] text-[#151512]",
+    soft: "bg-[#fffdf5] border-[#d9d5c8]",
+    panel: "bg-[#fbf8ef] border-[#d9d5c8]",
+    raised: "bg-[#fffdf6] border-[#d9d5c8] shadow-[0_14px_30px_rgba(47,43,31,0.10)]",
+    muted: "text-[#747062]",
+    faint: "text-[#9a9585]",
+    text: "text-[#151512]",
+    input: "bg-[#f6f1e6] border-[#d6d0c1] text-[#151512] placeholder:text-[#aaa390]",
+    ghost: "bg-[#ece6d6] text-[#24231f] hover:bg-[#e3dccb]",
+    primary: "bg-[#dfff14] text-[#11120a] hover:bg-[#d3f000]",
+    danger: "bg-[#151512] text-[#f7f4ea] hover:bg-[#2a2924]",
+    statusOn: "bg-[#dfff14] text-[#151512]",
+    statusOff: "bg-[#e9e3d2] text-[#756f60]"
+  },
+  dark: {
+    app: "bg-[#161614] text-[#f5f1e7]",
+    soft: "bg-[#22221f] border-[#35342f]",
+    panel: "bg-[#1d1d1a] border-[#34332e]",
+    raised: "bg-[#242420] border-[#3a3932] shadow-[0_18px_40px_rgba(0,0,0,0.28)]",
+    muted: "text-[#aaa696]",
+    faint: "text-[#797568]",
+    text: "text-[#f5f1e7]",
+    input: "bg-[#151512] border-[#393831] text-[#f5f1e7] placeholder:text-[#777164]",
+    ghost: "bg-[#32312b] text-[#f5f1e7] hover:bg-[#3b3a33]",
+    primary: "bg-[#dfff14] text-[#11120a] hover:bg-[#d3f000]",
+    danger: "bg-[#f5f1e7] text-[#151512] hover:bg-[#e8e1d0]",
+    statusOn: "bg-[#dfff14] text-[#11120a]",
+    statusOff: "bg-[#33322c] text-[#aaa696]"
+  }
+};
+
+function ToggleRow({ theme, label, hint, value, onChange, disabled = false }) {
+  const t = THEME[theme];
   return (
-    <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-3">
+    <div className={`flex items-center justify-between gap-3 rounded-2xl border px-3 py-3 ${t.panel}`}>
       <div className="min-w-0">
-        <div className="text-[10px] font-semibold text-white">{label}</div>
-        <div className="text-[9px] leading-relaxed text-white/45">{hint}</div>
+        <div className={`text-[11px] font-black ${t.text}`}>{label}</div>
+        <div className={`text-[9px] leading-relaxed ${t.muted}`}>{hint}</div>
       </div>
       <button
         onClick={() => onChange(!value)}
         disabled={disabled}
-        className={`flex h-6 w-10 items-center rounded-full transition-all disabled:opacity-40 ${
-          value ? "bg-white" : "bg-white/15"
-        }`}
+        className={`flex h-7 w-12 items-center rounded-full p-1 transition disabled:opacity-40 ${value ? t.primary : t.ghost}`}
       >
-        <span
-          className={`h-4 w-4 rounded-full transition-all ${
-            value ? "translate-x-5 bg-black" : "translate-x-1 bg-white"
-          }`}
-        />
+        <span className={`h-5 w-5 rounded-full bg-current transition ${value ? "translate-x-5 text-[#11120a]" : "translate-x-0 text-[#f7f4ea]"}`} />
       </button>
     </div>
   );
 }
 
-function KeyCard({ label, value, saved, onChange, onSave, onDelete, placeholder }) {
+function KeyCard({ theme, label, value, saved, onChange, onSave, onDelete, placeholder }) {
+  const t = THEME[theme];
   return (
-    <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-3">
+    <div className={`rounded-2xl border p-3 ${t.panel}`}>
       <div className="mb-2 flex items-center justify-between gap-3">
-        <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/55">{label}</span>
-        {saved && <span className="text-[9px] text-emerald-300">Saved</span>}
+        <span className={`text-[10px] font-black uppercase tracking-[0.14em] ${t.faint}`}>{label}</span>
+        {saved && <span className="rounded-full bg-[#dfff14] px-2 py-1 text-[9px] font-black text-[#11120a]">Saved</span>}
       </div>
       {saved ? (
         <div className="flex items-center gap-2">
-          <div className="flex-1 rounded-xl border border-white/6 bg-black/50 px-3 py-2 text-[10px] tracking-[0.25em] text-white/30">
-            ••••••••••••••••
-          </div>
-          <button onClick={onDelete} className="rounded-xl bg-white/6 px-3 py-2 text-[10px] text-white/75 transition hover:bg-white/10">
+          <div className={`flex-1 rounded-xl border px-3 py-2 text-[10px] tracking-[0.2em] ${t.input}`}>••••••••••••••••</div>
+          <button onClick={onDelete} className={`rounded-xl px-3 py-2 text-[10px] font-black transition ${t.ghost}`}>
             Remove
           </button>
         </div>
@@ -71,14 +116,33 @@ function KeyCard({ label, value, saved, onChange, onSave, onDelete, placeholder 
             value={value}
             onChange={(e) => onChange(e.target.value)}
             placeholder={placeholder}
-            className="min-w-0 flex-1 rounded-xl border border-white/8 bg-black/50 px-3 py-2 text-[11px] text-white outline-none transition placeholder:text-white/20 focus:border-white/25"
+            className={`min-w-0 flex-1 rounded-xl border px-3 py-2 text-[11px] font-semibold outline-none transition focus:border-[#dfff14] ${t.input}`}
           />
-          <button onClick={onSave} disabled={!value.trim()} className="rounded-xl bg-white px-3 py-2 text-[10px] font-semibold text-black transition hover:bg-white/90 disabled:opacity-30">
+          <button onClick={onSave} disabled={!value.trim()} className={`rounded-xl px-3 py-2 text-[10px] font-black transition disabled:opacity-35 ${t.primary}`}>
             Save
           </button>
         </div>
       )}
     </div>
+  );
+}
+
+function ThemeButton({ theme, value, icon: Icon, title, body, active, onClick }) {
+  const t = THEME[theme];
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded-[22px] border p-3 text-left transition ${active ? "border-[#dfff14] bg-[#dfff14]/20" : t.panel}`}
+    >
+      <div className="mb-4 flex items-center justify-between">
+        <span className={`grid h-9 w-9 place-items-center rounded-full ${active ? "bg-[#dfff14] text-[#11120a]" : t.ghost}`}>
+          <Icon className="h-4 w-4" />
+        </span>
+        {active && <Check className="h-4 w-4 text-[#97ad00]" />}
+      </div>
+      <div className={`text-sm font-black ${t.text}`}>{title}</div>
+      <div className={`mt-1 text-[10px] leading-relaxed ${t.muted}`}>{body}</div>
+    </button>
   );
 }
 
@@ -88,20 +152,11 @@ export default function App() {
   const [launching, setLaunching] = useState(false);
   const [hiding, setHiding] = useState(false);
   const [sidekickActive, setSidekickActive] = useState(false);
-  const [agentState, setAgentState] = useState({
-    command: "",
-    isRunning: false,
-    currentAction: "Idle",
-    result: null,
-    logs: []
-  });
-  const [voiceState, setVoiceState] = useState({
-    mode: "idle",
-    lastResponse: "",
-    transcript: "",
-    error: null
-  });
-  const [voiceSettings, setVoiceSettings] = useState(DEFAULT_VOICE_SETTINGS);
+  const [theme, setTheme] = useState("light");
+  const [themeChosen, setThemeChosen] = useState(false);
+  const [agentState, setAgentState] = useState({ command: "", isRunning: false, currentAction: "Idle", result: null, logs: [] });
+  const [voiceState, setVoiceState] = useState({ mode: "idle", lastResponse: "", transcript: "", error: null });
+  const [appSettings, setAppSettings] = useState(DEFAULT_SETTINGS);
   const [aiMode, setAiMode] = useState("api");
   const [providerPriority, setProviderPriority] = useState(["gemini", "openrouter", "groq", "openai", "claude"]);
   const [apiKeys, setApiKeys] = useState({ gemini: "", openrouter: "", groq: "", claude: "", openai: "" });
@@ -111,20 +166,25 @@ export default function App() {
   const [ollamaStatus, setOllamaStatus] = useState(null);
   const [testingOllama, setTestingOllama] = useState(false);
 
+  const t = THEME[theme];
   const hasApiKey = providerPriority.some((provider) => apiKeys[provider] && testedKeys[provider]);
   const aiReady = aiMode === "ollama" ? Boolean(ollamaStatus?.connected) : hasApiKey;
-  const statusTone = sidekickActive ? "text-emerald-300" : "text-white/45";
+  const isWindowsDesktop = typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent) && !/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
 
   useEffect(() => {
     async function load() {
-      const stored = await chrome.storage.local.get([
+      const stored = await chromeApi.storage.local.get([
         "aiMode",
         "providerPriority",
         "apiKeys",
         "ollamaBaseUrl",
         "ollamaModel",
-        "voiceSettings"
+        "voiceSettings",
+        "sidekickTheme",
+        "sidekickThemeChosen"
       ]);
+      if (stored.sidekickTheme) setTheme(stored.sidekickTheme);
+      setThemeChosen(Boolean(stored.sidekickThemeChosen));
       if (stored.aiMode) setAiMode(stored.aiMode);
       if (stored.providerPriority) setProviderPriority(stored.providerPriority);
       if (stored.apiKeys) {
@@ -137,9 +197,9 @@ export default function App() {
       }
       if (stored.ollamaBaseUrl) setOllamaBaseUrl(stored.ollamaBaseUrl);
       if (stored.ollamaModel) setOllamaModel(stored.ollamaModel);
-      if (stored.voiceSettings) setVoiceSettings((prev) => ({ ...prev, ...stored.voiceSettings }));
+      if (stored.voiceSettings) setAppSettings((prev) => ({ ...prev, ...stored.voiceSettings }));
 
-      chrome.runtime.sendMessage({ action: "GET_SIDEKICK_STATUS" }, (response) => {
+      chromeApi.runtime.sendMessage({ action: "GET_SIDEKICK_STATUS" }, (response) => {
         if (response?.success) {
           setSidekickActive(Boolean(response.active));
           setAgentState(response.state || {});
@@ -149,7 +209,7 @@ export default function App() {
       });
 
       if ((stored.aiMode || aiMode) === "ollama") {
-        chrome.runtime.sendMessage({ action: "CHECK_OLLAMA" }, (resp) => {
+        chromeApi.runtime.sendMessage({ action: "CHECK_OLLAMA" }, (resp) => {
           setOllamaStatus(resp?.connected ? { connected: true, models: resp.models || [] } : { connected: false, error: resp?.error || "Offline" });
         });
       }
@@ -160,29 +220,29 @@ export default function App() {
 
   useEffect(() => {
     const listener = (message) => {
-      if (message.action === "STATE_UPDATED") {
-        setAgentState(message.state);
-      } else if (message.action === "VOICE_STATE_UPDATED") {
-        setVoiceState(message.voiceState);
-      } else if (message.action === "SIDEKICK_ENABLED") {
-        setSidekickActive(Boolean(message.enabled));
-      }
+      if (message.action === "STATE_UPDATED") setAgentState(message.state);
+      else if (message.action === "VOICE_STATE_UPDATED") setVoiceState(message.voiceState);
+      else if (message.action === "SIDEKICK_ENABLED") setSidekickActive(Boolean(message.enabled));
     };
-    chrome.runtime.onMessage.addListener(listener);
-    return () => chrome.runtime.onMessage.removeListener(listener);
+    chromeApi.runtime.onMessage.addListener(listener);
+    return () => chromeApi.runtime.onMessage.removeListener(listener);
   }, []);
 
   const previewState = useMemo(() => {
     if (voiceState?.error) return "error";
-    if (voiceState?.mode === "speaking") return "speaking";
-    if (voiceState?.mode === "listening") return "listening";
     if (agentState?.isRunning) return "processing";
     return "idle";
-  }, [agentState?.isRunning, voiceState?.error, voiceState?.mode]);
+  }, [agentState?.isRunning, voiceState?.error]);
+
+  const saveTheme = async (nextTheme, chosen = true) => {
+    setTheme(nextTheme);
+    setThemeChosen(chosen);
+    await chromeApi.storage.local.set({ sidekickTheme: nextTheme, sidekickThemeChosen: chosen });
+  };
 
   const launchSidekick = async () => {
     setLaunching(true);
-    chrome.runtime.sendMessage({ action: "INJECT_NOTCH" }, (response) => {
+    chromeApi.runtime.sendMessage({ action: "INJECT_NOTCH" }, (response) => {
       setLaunching(false);
       if (response?.success) setSidekickActive(true);
     });
@@ -190,7 +250,7 @@ export default function App() {
 
   const hideSidekick = async () => {
     setHiding(true);
-    chrome.runtime.sendMessage({ action: "REMOVE_NOTCH" }, (response) => {
+    chromeApi.runtime.sendMessage({ action: "REMOVE_NOTCH" }, (response) => {
       setHiding(false);
       if (response?.success) setSidekickActive(false);
     });
@@ -198,81 +258,51 @@ export default function App() {
 
   const saveKey = async (provider, value) => {
     if (!value.trim()) return;
-    chrome.runtime.sendMessage({ action: "TEST_API_KEY", provider, apiKey: value.trim() }, async (res) => {
+    chromeApi.runtime.sendMessage({ action: "TEST_API_KEY", provider, apiKey: value.trim() }, async (res) => {
       if (!res?.success) return;
-      const stored = await chrome.storage.local.get("apiKeys");
+      const stored = await chromeApi.storage.local.get("apiKeys");
       const next = { ...(stored.apiKeys || {}), [provider]: value.trim() };
-      await chrome.storage.local.set({ apiKeys: next });
+      await chromeApi.storage.local.set({ apiKeys: next });
       setApiKeys((prev) => ({ ...prev, [provider]: value.trim() }));
       setTestedKeys((prev) => ({ ...prev, [provider]: true }));
     });
   };
 
   const deleteKey = async (provider) => {
-    const stored = await chrome.storage.local.get("apiKeys");
+    const stored = await chromeApi.storage.local.get("apiKeys");
     const next = { ...(stored.apiKeys || {}) };
     delete next[provider];
-    await chrome.storage.local.set({ apiKeys: next });
+    await chromeApi.storage.local.set({ apiKeys: next });
     setApiKeys((prev) => ({ ...prev, [provider]: "" }));
     setTestedKeys((prev) => ({ ...prev, [provider]: false }));
   };
 
-  const saveVoiceSetting = async (key, value) => {
-    const next = { ...voiceSettings, [key]: value };
-    if (key === "voiceMode") {
-      next.voiceEnabled = value !== "text";
-    }
-    setVoiceSettings(next);
-    await chrome.storage.local.set({
-      voiceSettings: next,
-      voiceEnabled: next.voiceEnabled,
-      voiceMode: next.voiceMode,
-      wakeWord: next.wakeWord,
-      autoSpeak: next.autoSpeak,
-      speechRate: next.speechRate
-    });
-    chrome.runtime.sendMessage({
-      action: "SAVE_VOICE_PREFERENCES",
-      preferences: {
-        voiceEnabled: next.voiceEnabled,
-        voiceMode: next.voiceMode,
-        wakeWord: next.wakeWord,
-        autoSpeak: next.autoSpeak,
-        speechRate: next.speechRate
-      }
-    });
-    chrome.runtime.sendMessage({
-      action: "UPDATE_VOICE_SETTINGS",
-      preferences: {
-        prefersVoiceReplies: next.autoSpeak && !next.muted,
-        memoryLearning: next.memoryLearning
-      }
-    });
+  const saveAppSetting = async (key, value) => {
+    const next = { ...appSettings, [key]: value };
+    setAppSettings(next);
+    await chromeApi.storage.local.set({ voiceSettings: next });
+    chromeApi.runtime.sendMessage({ action: "UPDATE_VOICE_SETTINGS", preferences: { memoryLearning: next.memoryLearning } });
   };
 
   const updateProviderPref = async (slot, newProvider) => {
     const current = [...providerPriority];
     const existingSlot = current.indexOf(newProvider);
-    if (existingSlot !== -1 && existingSlot !== slot) {
-      current[existingSlot] = current[slot];
-    }
+    if (existingSlot !== -1 && existingSlot !== slot) current[existingSlot] = current[slot];
     current[slot] = newProvider;
     setProviderPriority(current);
-    await chrome.storage.local.set({ providerPriority: current });
+    await chromeApi.storage.local.set({ providerPriority: current });
   };
 
   const saveProviderMode = async (mode = aiMode) => {
     setAiMode(mode);
-    await chrome.storage.local.set({ aiMode: mode, ollamaBaseUrl, ollamaModel, providerPriority });
-    if (mode === "ollama") {
-      testOllamaConnection();
-    }
+    await chromeApi.storage.local.set({ aiMode: mode, ollamaBaseUrl, ollamaModel, providerPriority });
+    if (mode === "ollama") testOllamaConnection();
   };
 
   const testOllamaConnection = async () => {
     setTestingOllama(true);
-    await chrome.storage.local.set({ ollamaBaseUrl, ollamaModel });
-    chrome.runtime.sendMessage({ action: "CHECK_OLLAMA" }, (resp) => {
+    await chromeApi.storage.local.set({ ollamaBaseUrl, ollamaModel });
+    chromeApi.runtime.sendMessage({ action: "CHECK_OLLAMA" }, (resp) => {
       setTestingOllama(false);
       setOllamaStatus(resp?.connected ? { connected: true, models: resp.models || [] } : { connected: false, error: resp?.error || "Offline" });
     });
@@ -280,115 +310,225 @@ export default function App() {
 
   if (booting) {
     return (
-      <div className="flex h-[520px] w-[360px] items-center justify-center bg-black text-white">
+      <div className={`flex h-[520px] w-[360px] items-center justify-center ${t.app}`}>
         <div className="text-center">
-          <Loader2 className="mx-auto mb-3 h-5 w-5 animate-spin text-white/70" />
-          <p className="text-[11px] uppercase tracking-[0.28em] text-white/45">Launching Sidekick</p>
+          <img src="/sidekick_logo.png" alt="" className="mx-auto mb-4 h-14 w-14 rounded-2xl" />
+          <Loader2 className="mx-auto h-5 w-5 animate-spin text-[#9eb300]" />
         </div>
       </div>
     );
   }
 
+  const settingsPanel = (
+    <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/30 p-4 backdrop-blur-sm">
+      <div className={`w-full rounded-[28px] border p-4 ${t.raised}`}>
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <div className={`text-[10px] font-black uppercase tracking-[0.18em] ${t.faint}`}>Settings</div>
+            <div className={`mt-1 text-base font-black ${t.text}`}>Tune the little helper</div>
+          </div>
+          <button onClick={() => setShowSettings(false)} className={`rounded-full p-2 transition ${t.ghost}`}>
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="max-h-[400px] space-y-3 overflow-y-auto pr-1">
+          <div className={`rounded-2xl border p-3 ${t.panel}`}>
+            <div className={`mb-2 text-[10px] font-black uppercase tracking-[0.16em] ${t.faint}`}>Theme</div>
+            <div className="grid grid-cols-2 gap-2">
+              <ThemeButton theme={theme} active={theme === "light"} icon={Sun} title="Cream" body="Soft, bright, cozy." onClick={() => saveTheme("light")} />
+              <ThemeButton theme={theme} active={theme === "dark"} icon={Moon} title="Matte" body="Quiet charcoal." onClick={() => saveTheme("dark")} />
+            </div>
+          </div>
+
+          <div className={`rounded-2xl border p-3 ${t.panel}`}>
+            <div className={`mb-2 text-[10px] font-black uppercase tracking-[0.16em] ${t.faint}`}>AI mode</div>
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={() => saveProviderMode("api")} className={`rounded-2xl px-3 py-2 text-[11px] font-black transition ${aiMode === "api" ? t.primary : t.ghost}`}>Cloud API</button>
+              <button onClick={() => saveProviderMode("ollama")} className={`rounded-2xl px-3 py-2 text-[11px] font-black transition ${aiMode === "ollama" ? t.primary : t.ghost}`}>Local AI</button>
+            </div>
+          </div>
+
+          {aiMode === "ollama" && (
+            <div className={`space-y-2 rounded-2xl border p-3 ${t.panel}`}>
+              <div className={`flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.16em] ${t.faint}`}>
+                <Cpu className="h-3.5 w-3.5" />
+                Ollama
+              </div>
+              <input value={ollamaBaseUrl} onChange={(e) => setOllamaBaseUrl(e.target.value)} className={`w-full rounded-xl border px-3 py-2 text-[11px] font-semibold outline-none ${t.input}`} />
+              <input value={ollamaModel} onChange={(e) => setOllamaModel(e.target.value)} className={`w-full rounded-xl border px-3 py-2 text-[11px] font-semibold outline-none ${t.input}`} />
+              <button onClick={testOllamaConnection} className={`inline-flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2 text-[11px] font-black ${t.primary}`}>
+                {testingOllama ? <Loader2 className="h-4 w-4 animate-spin" /> : <Cpu className="h-4 w-4" />}
+                Test connection
+              </button>
+              {ollamaStatus && <div className={`text-[10px] ${t.muted}`}>{ollamaStatus.connected ? "Connected" : ollamaStatus.error}</div>}
+            </div>
+          )}
+
+          {aiMode === "api" && (
+            <div className="space-y-3">
+              <div className={`rounded-2xl border p-3 ${t.panel}`}>
+                <div className={`mb-2 text-[10px] font-black uppercase tracking-[0.16em] ${t.faint}`}>Provider order</div>
+                <div className="space-y-2">
+                  {[0, 1, 2, 3, 4].map((slot) => (
+                    <select
+                      key={slot}
+                      value={providerPriority[slot] || ""}
+                      onChange={(e) => updateProviderPref(slot, e.target.value)}
+                      className={`w-full rounded-xl border px-3 py-2 text-[11px] font-semibold outline-none ${t.input}`}
+                    >
+                      <option value="gemini">Gemini</option>
+                      <option value="openai">OpenAI</option>
+                      <option value="claude">Claude</option>
+                      <option value="openrouter">OpenRouter</option>
+                      <option value="groq">Groq</option>
+                    </select>
+                  ))}
+                </div>
+              </div>
+
+              {Array.from(new Set(providerPriority)).map((provider) => (
+                <KeyCard
+                  key={provider}
+                  theme={theme}
+                  label={`${provider} key`}
+                  value={apiKeys[provider] || ""}
+                  saved={Boolean(testedKeys[provider])}
+                  onChange={(value) => setApiKeys((prev) => ({ ...prev, [provider]: value }))}
+                  onSave={() => saveKey(provider, apiKeys[provider] || "")}
+                  onDelete={() => deleteKey(provider)}
+                  placeholder={`Enter ${provider} key`}
+                />
+              ))}
+            </div>
+          )}
+
+          {isWindowsDesktop && (
+            <div className={`rounded-2xl border p-3 text-[10px] font-semibold leading-relaxed ${t.panel} ${t.muted}`}>
+              Sidekick is prompt based. For dictation on Windows desktop, click the prompt field and press <span className={`font-black ${t.text}`}>Windows + H</span>.
+            </div>
+          )}
+
+          <ToggleRow theme={theme} label="Memory learning" hint="Store lightweight learned preferences locally." value={appSettings.memoryLearning} onChange={(value) => saveAppSetting("memoryLearning", value)} />
+        </div>
+      </div>
+    </div>
+  );
+
+  const firstRun = !themeChosen && (
+    <div className={`absolute inset-0 z-[60] p-5 ${t.app}`}>
+      <div className={`flex h-full flex-col rounded-[30px] border p-5 ${t.raised}`}>
+        <div className="flex items-center gap-3">
+          <img src="/sidekick_logo.png" alt="Sidekick" className="h-14 w-14 rounded-2xl object-cover" />
+          <div>
+            <div className={`text-[10px] font-black uppercase tracking-[0.18em] ${t.faint}`}>Sidekick</div>
+            <h1 className={`text-2xl font-black leading-none ${t.text}`}>Pick a vibe</h1>
+          </div>
+        </div>
+        <p className={`mt-4 text-[12px] font-semibold leading-relaxed ${t.muted}`}>
+          Choose how Sidekick should look. You can switch this later in settings.
+        </p>
+        <div className="mt-5 grid grid-cols-2 gap-3">
+          <ThemeButton theme={theme} active={theme === "light"} icon={Sun} title="Cream light" body="Friendly and bright." onClick={() => setTheme("light")} />
+          <ThemeButton theme={theme} active={theme === "dark"} icon={Moon} title="Matte dark" body="Soft charcoal." onClick={() => setTheme("dark")} />
+        </div>
+        <button onClick={() => saveTheme(theme, true)} className={`mt-auto inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-black ${t.primary}`}>
+          Start Sidekick
+          <ChevronRight className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  );
+
   return (
-    <div className="relative flex h-[520px] w-[360px] flex-col overflow-hidden bg-[#050505] text-white">
-      <div className="absolute inset-x-0 top-0 h-28 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.12),transparent_58%)] pointer-events-none" />
+    <div className={`relative flex h-[520px] w-[360px] flex-col overflow-hidden ${t.app}`}>
+      <div className="pointer-events-none absolute -right-16 -top-16 h-32 w-32 rotate-12 rounded-[34px] bg-[#dfff14]/80" />
+      <div className="pointer-events-none absolute -left-10 bottom-10 h-24 w-24 rounded-[28px] bg-[#b9d8ff]/40" />
 
       <header className="relative z-10 flex items-center justify-between px-4 pb-3 pt-4">
-        <div>
-          <div className="text-[10px] uppercase tracking-[0.28em] text-white/42">Sidekick</div>
-          <div className="mt-1 text-lg font-semibold">Floating notch mode</div>
+        <div className="flex items-center gap-3">
+          <img src="/sidekick_logo.png" alt="Sidekick" className="h-11 w-11 rounded-2xl object-cover shadow-sm" />
+          <div>
+            <div className={`text-[10px] font-black uppercase tracking-[0.18em] ${t.faint}`}>Sidekick</div>
+            <div className={`mt-0.5 text-base font-black ${t.text}`}>Sidekick buddy</div>
+          </div>
         </div>
-        <button onClick={() => setShowSettings(true)} className="rounded-full border border-white/10 bg-white/[0.04] p-2 text-white/70 transition hover:bg-white/[0.08] hover:text-white">
+        <button onClick={() => setShowSettings(true)} className={`rounded-full p-2 transition ${t.ghost}`}>
           <Settings className="h-4 w-4" />
         </button>
       </header>
 
       <div className="relative z-10 flex-1 space-y-4 overflow-y-auto px-4 pb-4">
-        <div className="rounded-3xl border border-white/8 bg-white/[0.03] p-4 shadow-[0_24px_50px_rgba(0,0,0,0.35)]">
+        <div className={`rounded-[26px] border p-4 ${t.raised}`}>
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className={`text-[10px] uppercase tracking-[0.22em] ${statusTone}`}>
-                {sidekickActive ? "Active on pages" : "Not active"}
+              <div className={`inline-flex rounded-full px-2 py-1 text-[9px] font-black uppercase tracking-[0.14em] ${sidekickActive ? t.statusOn : t.statusOff}`}>
+                {sidekickActive ? "Live" : "Off"}
               </div>
-              <p className="mt-2 text-[12px] leading-relaxed text-white/72">
-                Launch once, then use Sidekick directly inside webpages. Tasks keep running in the background.
+              <p className={`mt-3 text-[12px] font-semibold leading-relaxed ${t.muted}`}>
+                Launch the notch, type what you want, and Sidekick handles the browser work.
               </p>
             </div>
-            <div className={`rounded-full px-2 py-1 text-[9px] uppercase tracking-[0.18em] ${sidekickActive ? "bg-emerald-400/12 text-emerald-300" : "bg-white/6 text-white/40"}`}>
-              {sidekickActive ? "Live" : "Off"}
-            </div>
+            <Sparkles className="mt-1 h-5 w-5 text-[#b7cf00]" />
           </div>
 
           <div className="mt-4 grid grid-cols-2 gap-2">
-            <button
-              onClick={launchSidekick}
-              disabled={launching || !aiReady}
-              className="inline-flex items-center justify-center gap-2 rounded-2xl bg-white px-3 py-3 text-[11px] font-semibold text-black transition hover:bg-white/90 disabled:opacity-35"
-            >
+            <button onClick={launchSidekick} disabled={launching || !aiReady} className={`inline-flex items-center justify-center gap-2 rounded-2xl px-3 py-3 text-[11px] font-black transition disabled:opacity-35 ${t.primary}`}>
               {launching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              Launch Sidekick
+              Launch
             </button>
-            <button
-              onClick={hideSidekick}
-              disabled={hiding || !sidekickActive}
-              className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-3 text-[11px] text-white transition hover:bg-white/[0.08] disabled:opacity-35"
-            >
+            <button onClick={hideSidekick} disabled={hiding || !sidekickActive} className={`inline-flex items-center justify-center gap-2 rounded-2xl px-3 py-3 text-[11px] font-black transition disabled:opacity-35 ${t.ghost}`}>
               {hiding ? <Loader2 className="h-4 w-4 animate-spin" /> : <EyeOff className="h-4 w-4" />}
-              Hide Sidekick
+              Hide
             </button>
           </div>
 
           {!aiReady && (
-            <div className="mt-3 rounded-2xl border border-amber-400/15 bg-amber-400/8 px-3 py-2 text-[10px] leading-relaxed text-amber-100/90">
-              Configure an AI provider in settings before launching the notch.
+            <div className={`mt-3 rounded-2xl border border-[#dfff14]/40 bg-[#dfff14]/15 px-3 py-2 text-[10px] font-semibold leading-relaxed ${t.text}`}>
+              Add an AI provider in settings before launching.
             </div>
           )}
         </div>
 
-        <SidekickNotch
-          active={sidekickActive}
-          state={previewState}
-          command={agentState.command}
-          response={voiceState.lastResponse || agentState.result?.text}
-        />
+        <SidekickNotch theme={theme} active={sidekickActive} state={previewState} command={agentState.command} response={voiceState.lastResponse || agentState.result?.text} />
 
         <div className="grid grid-cols-2 gap-3">
-          <div className="rounded-3xl border border-white/8 bg-white/[0.03] p-4">
-            <div className="mb-2 flex items-center gap-2 text-white/70">
-              <Mic className="h-4 w-4" />
-              <span className="text-[10px] uppercase tracking-[0.2em]">Voice</span>
+          <div className={`rounded-[24px] border p-4 ${t.panel}`}>
+            <div className={`mb-2 flex items-center gap-2 ${t.muted}`}>
+              <Sparkles className="h-4 w-4" />
+              <span className="text-[10px] font-black uppercase tracking-[0.16em]">Prompt</span>
             </div>
-            <div className="text-sm font-medium capitalize">{voiceState.mode || "idle"}</div>
-            <p className="mt-2 text-[10px] leading-relaxed text-white/42">
-              {voiceState.transcript || voiceState.error || "Live mic and speech happen inside the notch."}
+            <div className={`text-sm font-black ${t.text}`}>Text-first</div>
+            <p className={`mt-2 text-[10px] font-semibold leading-relaxed ${t.muted}`}>
+              {isWindowsDesktop ? "Windows + H works for dictation." : "Type prompts directly in the notch."}
             </p>
           </div>
-          <div className="rounded-3xl border border-white/8 bg-white/[0.03] p-4">
-            <div className="mb-2 flex items-center gap-2 text-white/70">
+          <div className={`rounded-[24px] border p-4 ${t.panel}`}>
+            <div className={`mb-2 flex items-center gap-2 ${t.muted}`}>
               <Eye className="h-4 w-4" />
-              <span className="text-[10px] uppercase tracking-[0.2em]">Task engine</span>
+              <span className="text-[10px] font-black uppercase tracking-[0.16em]">Engine</span>
             </div>
-            <div className="text-sm font-medium">{agentState.isRunning ? "Running" : "Ready"}</div>
-            <p className="mt-2 text-[10px] leading-relaxed text-white/42">
-              {agentState.currentAction || "Background worker is ready."}
+            <div className={`text-sm font-black ${t.text}`}>{agentState.isRunning ? "Running" : "Ready"}</div>
+            <p className={`mt-2 text-[10px] font-semibold leading-relaxed ${t.muted}`}>
+              {agentState.currentAction || "Waiting for a task."}
             </p>
           </div>
         </div>
 
-        <div className="rounded-3xl border border-white/8 bg-white/[0.03] p-4">
+        <div className={`rounded-[24px] border p-4 ${t.panel}`}>
           <div className="mb-3 flex items-center justify-between">
-            <div className="text-[10px] uppercase tracking-[0.22em] text-white/50">Recent activity</div>
-            <button onClick={() => setShowSettings(true)} className="text-[10px] text-white/50 transition hover:text-white">Settings</button>
+            <div className={`text-[10px] font-black uppercase tracking-[0.16em] ${t.faint}`}>Recent activity</div>
+            <button onClick={() => setShowSettings(true)} className={`text-[10px] font-black transition ${t.muted}`}>Settings</button>
           </div>
           <div className="space-y-2">
             {(agentState.logs || []).slice(0, 4).map((log, index) => (
-              <div key={`${log.time}-${index}`} className="rounded-2xl border border-white/6 bg-black/40 px-3 py-2">
-                <div className="text-[11px] text-white/76">{log.message}</div>
-                <div className="mt-1 text-[9px] uppercase tracking-[0.18em] text-white/28">{log.time}</div>
+              <div key={`${log.time}-${index}`} className={`rounded-2xl border px-3 py-2 ${t.soft}`}>
+                <div className={`text-[11px] font-semibold ${t.text}`}>{log.message}</div>
+                <div className={`mt-1 text-[9px] font-black uppercase tracking-[0.14em] ${t.faint}`}>{log.time}</div>
               </div>
             ))}
             {(!agentState.logs || agentState.logs.length === 0) && (
-              <div className="rounded-2xl border border-white/6 bg-black/30 px-3 py-3 text-[10px] text-white/40">
+              <div className={`rounded-2xl border px-3 py-3 text-[10px] font-semibold ${t.soft} ${t.muted}`}>
                 No recent tasks yet.
               </div>
             )}
@@ -396,141 +536,8 @@ export default function App() {
         </div>
       </div>
 
-      {showSettings && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
-          <div className="w-full rounded-[28px] border border-white/10 bg-[#0a0a0a] p-4 shadow-[0_28px_60px_rgba(0,0,0,0.45)]">
-            <div className="mb-4 flex items-center justify-between">
-              <div>
-                <div className="text-[10px] uppercase tracking-[0.24em] text-white/45">Settings</div>
-                <div className="mt-1 text-sm font-semibold">Popup control + engine setup</div>
-              </div>
-              <button onClick={() => setShowSettings(false)} className="rounded-full border border-white/10 bg-white/[0.04] p-2 text-white/70 transition hover:bg-white/[0.08]">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="max-h-[400px] space-y-3 overflow-y-auto pr-1">
-              <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-3">
-                <div className="mb-2 text-[10px] uppercase tracking-[0.2em] text-white/45">AI mode</div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button onClick={() => saveProviderMode("api")} className={`rounded-2xl px-3 py-2 text-[11px] transition ${aiMode === "api" ? "bg-white text-black" : "bg-white/[0.04] text-white/72"}`}>Cloud API</button>
-                  <button onClick={() => saveProviderMode("ollama")} className={`rounded-2xl px-3 py-2 text-[11px] transition ${aiMode === "ollama" ? "bg-white text-black" : "bg-white/[0.04] text-white/72"}`}>Local AI</button>
-                </div>
-              </div>
-
-              {aiMode === "ollama" && (
-                <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-3 space-y-2">
-                  <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.2em] text-white/45">
-                    <Cpu className="h-3.5 w-3.5" />
-                    Ollama
-                  </div>
-                  <input value={ollamaBaseUrl} onChange={(e) => setOllamaBaseUrl(e.target.value)} className="w-full rounded-xl border border-white/8 bg-black/50 px-3 py-2 text-[11px] text-white outline-none" />
-                  <input value={ollamaModel} onChange={(e) => setOllamaModel(e.target.value)} className="w-full rounded-xl border border-white/8 bg-black/50 px-3 py-2 text-[11px] text-white outline-none" />
-                  <button onClick={testOllamaConnection} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-white px-3 py-2 text-[11px] font-semibold text-black">
-                    {testingOllama ? <Loader2 className="h-4 w-4 animate-spin" /> : <Cpu className="h-4 w-4" />}
-                    Test connection
-                  </button>
-                  {ollamaStatus && <div className="text-[10px] text-white/55">{ollamaStatus.connected ? "Connected" : ollamaStatus.error}</div>}
-                </div>
-              )}
-
-              {aiMode === "api" && (
-                <div className="space-y-3">
-                  <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-3">
-                    <div className="mb-2 text-[10px] uppercase tracking-[0.2em] text-white/45">Provider order</div>
-                    <div className="space-y-2">
-                      {[0, 1, 2, 3, 4].map((slot) => (
-                        <select
-                          key={slot}
-                          value={providerPriority[slot] || ""}
-                          onChange={(e) => updateProviderPref(slot, e.target.value)}
-                          className="w-full rounded-xl border border-white/8 bg-black/50 px-3 py-2 text-[11px] text-white outline-none"
-                        >
-                          <option value="gemini">Gemini</option>
-                          <option value="openai">OpenAI</option>
-                          <option value="claude">Claude</option>
-                          <option value="openrouter">OpenRouter</option>
-                          <option value="groq">Groq</option>
-                        </select>
-                      ))}
-                    </div>
-                  </div>
-
-                  {Array.from(new Set(providerPriority)).map((provider) => (
-                    <KeyCard
-                      key={provider}
-                      label={`${provider} key`}
-                      value={apiKeys[provider] || ""}
-                      saved={Boolean(testedKeys[provider])}
-                      onChange={(value) => setApiKeys((prev) => ({ ...prev, [provider]: value }))}
-                      onSave={() => saveKey(provider, apiKeys[provider] || "")}
-                      onDelete={() => deleteKey(provider)}
-                      placeholder={`Enter ${provider} key`}
-                    />
-                  ))}
-                </div>
-              )}
-
-              <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-3">
-                <div className="mb-2 text-[10px] uppercase tracking-[0.2em] text-white/45">Voice mode</div>
-                <select
-                  value={voiceSettings.voiceMode}
-                  onChange={(e) => saveVoiceSetting("voiceMode", e.target.value)}
-                  className="w-full rounded-xl border border-white/8 bg-black/50 px-3 py-2 text-[11px] text-white outline-none"
-                >
-                  <option value="text">Text mode</option>
-                  <option value="manual">Manual mic</option>
-                  <option value="wake_word">Wake word</option>
-                </select>
-              </div>
-
-              <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-3">
-                <div className="mb-2 text-[10px] uppercase tracking-[0.2em] text-white/45">Wake word</div>
-                <input
-                  value={voiceSettings.wakeWord}
-                  onChange={(e) => saveVoiceSetting("wakeWord", e.target.value || "sidekick")}
-                  className="w-full rounded-xl border border-white/8 bg-black/50 px-3 py-2 text-[11px] text-white outline-none"
-                />
-              </div>
-
-              <ToggleRow label="Voice enabled" hint="Allow the notch microphone UI." value={voiceSettings.voiceEnabled} onChange={(value) => saveVoiceSetting("voiceEnabled", value)} />
-              <ToggleRow label="Auto speak replies" hint="Let the notch read back short responses." value={voiceSettings.autoSpeak} onChange={(value) => saveVoiceSetting("autoSpeak", value)} />
-              <ToggleRow label="Memory learning" hint="Store lightweight learned preferences locally." value={voiceSettings.memoryLearning} onChange={(value) => saveVoiceSetting("memoryLearning", value)} />
-
-              <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-3">
-                <div className="mb-2 flex items-center gap-2 text-[10px] uppercase tracking-[0.2em] text-white/45">
-                  <Volume2 className="h-3.5 w-3.5" />
-                  Speech rate
-                </div>
-                <input
-                  type="range"
-                  min="0.75"
-                  max="1.25"
-                  step="0.05"
-                  value={voiceSettings.speechRate}
-                  onChange={(e) => saveVoiceSetting("speechRate", Number(e.target.value))}
-                  className="w-full accent-white"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  onClick={() => window.speechSynthesis?.speak(new SpeechSynthesisUtterance("Sidekick speaker check."))}
-                  className="rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-2 text-[10px] text-white/75 transition hover:bg-white/[0.08]"
-                >
-                  Test speaker
-                </button>
-                <button
-                  onClick={launchSidekick}
-                  className="rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-2 text-[10px] text-white/75 transition hover:bg-white/[0.08]"
-                >
-                  Test microphone
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {showSettings && settingsPanel}
+      {firstRun}
     </div>
   );
 }
