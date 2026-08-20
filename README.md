@@ -1,182 +1,87 @@
-# Sidekick
+Sidekick
 
-Sidekick is a Chromium browser extension that puts an AI command notch on the page you are using. Ask it to summarize, search, compare, fill, write, scroll, click, or open things, and it turns that request into browser actions.
+Sidekick is basically an AI assistant that lives inside your browser.
 
-It is built for people who want the browser to feel less like chore mode and more like "cool, handle this for me."
+instead of opening ChatGPT, copying stuff from a website, pasting it, then going back and doing everything yourself, you can just tell Sidekick what you want and it tries to do it for you.
 
-This project was built and programmed primarily by me. I used AI tools such as Devin AI and Claude Code only for basic assistance, including small workflow suggestions, README wording, debugging guidance, and routine cleanup. The main product idea, browser-extension logic, implementation decisions, and core programming work were done by me.
+you can say things like:
 
-## Status
+* "summarize this page"
+* "find the cheapest one"
+* "fill this form"
+* "search this"
+* "open youtube"
+* "scroll down"
+* "click this"
+* "compare these products"
 
-Sidekick is installable as an unpacked Chromium extension. It is not packaged for the Chrome Web Store yet.
+Sidekick looks at the page your on, understands whats there, and uses browser actions to get the task done.
 
-## What It Does
+## how to use it
 
-- Opens a clean extension popup for setup, model selection, and task control.
-- Injects a persistent floating notch into normal webpages.
-- Reads page context, visible controls, links, form fields, products, headings, tables, and readable article text.
-- Runs browser actions like opening sites, clicking links/buttons, typing into fields, scrolling, searching, and extracting content.
-- Supports cloud provider fallback order for Gemini, OpenRouter, Groq, OpenAI, and Claude.
-- Supports local Ollama through `http://127.0.0.1:11434`.
-- Stores API keys and learned preferences in `chrome.storage.local`.
-- Includes workflow packs for shopping, YouTube, research, writing, productivity, and forms.
+how to install it:
 
-## Tech Stack
-
-- React 18
-- Vite
-- Tailwind CSS
-- Chrome Extension Manifest V3
-- Local helper bundle with Fuse, Readability, chrono-node, compromise, MiniSearch, localForage, linkify, currency.js, and Tesseract.js
-
-## Project Structure
-
-```text
-Sidekick/
-  public/
-    background.js              Extension service worker and agent loop
-    content.js                 Page runtime, DOM tools, and floating notch
-    followupEngine.js          Follow-up prompts and reply parsing
-    memoryManager.js           Local memory and preference helpers
-    manifest.json              MV3 extension manifest
-    sidekick_logo.png          Extension icon
-    vendor/                    Built local helper libraries and OCR runtime
-    workflows/                 Domain workflow packs
-  src/
-    App.jsx                    Popup UI
-    main.jsx                   React entry
-    sidekickLocalLibs.js       Source for the bundled helper runtime
-    components/Illustrations.jsx
-    styles/index.css
-  index.html
-  package.json
-  vite.config.js
-  vite.sidekick-libs.config.js
-```
-
-## Setup
-
-Requirements:
-
-- Node.js 20.19 or newer
-- npm
-- Chrome, Brave, Edge, or another Chromium browser
-
-Install dependencies:
+download the project and run:
 
 ```bash
 npm install
-```
-
-Build the extension:
-
-```bash
 npm run build
 ```
 
-Load it in the browser:
+then go to:
 
-1. Open `chrome://extensions`.
-2. Turn on Developer mode.
-3. Click `Load unpacked`.
-4. Select the `dist` folder.
+`chrome://extensions`
 
-For local popup development:
+turn on **Developer mode**, click **Load unpacked**, and select the `dist` folder.
 
-```bash
-npm run dev
-```
+Use ur own llm api key broski:
 
-For a production preview:
+open the Sidekick extension.
 
-```bash
-npm run preview
-```
+go to **Settings** and add an API key for one of the supported AI providers.
 
-## Scripts
+you can also use **Ollama** if you want to run a model locally.
 
-```text
-npm run dev          Start the Vite dev server for the popup UI.
-npm run build:libs   Rebuild the local helper bundle in public/vendor.
-npm run build        Rebuild helper libs, then build the extension into dist.
-npm run preview      Preview the built popup.
-npm run typecheck    Run TypeScript checks over JS/JSX project files.
-```
+how to use it:
 
-## AI Setup
+open any normal website and launch the Sidekick notch.
 
-Sidekick can use cloud providers or a local Ollama server.
+type what you want it to do.
 
-Cloud mode:
+thats basically it.
 
-1. Open the extension popup.
-2. Go to Settings.
-3. Choose provider order.
-4. Add at least one API key.
-5. Save and launch the notch.
+Sidekick reads the page, figures out what you mean and tries to do the actions for you.
 
-Local mode:
+## why i made it
 
-1. Install Ollama.
-2. Pull a model, for example `ollama pull qwen2.5:3b`.
-3. Keep Ollama running at `http://127.0.0.1:11434`.
-4. Select Local Ollama in Settings.
+i wanted the browser to feel more like something you can just talk to instead of something you have to keep clicking around in.
 
-## Permissions
+instead of:
 
-Sidekick asks for broad extension permissions because browser automation is the whole point. The important ones:
+**click → search → copy → paste → click → scroll → repeat**
 
-- `tabs` and `activeTab`: find and control the current browser tab.
-- `scripting`: inject the content runtime when needed.
-- `storage`: keep settings, keys, tasks, and local memory.
-- `clipboardRead` and `clipboardWrite`: support copy/paste browser tasks.
-- `<all_urls>`: let the notch and DOM tools work across normal websites.
+you can just say:
 
-This is powerful access, so keep the extension loaded only from code you trust.
+**"find me the cheapest option and open it."**
 
-## Privacy
+and let Sidekick handle the boring part.
 
-Short version: no hidden analytics, no project-owned backend, no random telemetry.
+tech used:
 
-Sidekick stores settings and keys locally through Chrome storage. When you ask Sidekick to use an AI provider, relevant task context may be sent to the provider you configured. If you use Ollama, requests go to your local Ollama server.
+built with React, Vite, Tailwind and Chrome Extension Manifest V3.
 
-Read [PRIVACY.md](PRIVACY.md) for the fuller version.
+it also supports multiple AI providers and local Ollama.
 
-## Release Checklist
 
-Before shipping a build:
+## status
 
-1. Run `npm ci`.
-2. Run `npm run typecheck`.
-3. Run `npm run build`.
-4. Load `dist` as an unpacked extension.
-5. Check popup boot, settings, API key save/delete, Ollama check, notch launch/hide, and one simple browser action.
-6. Confirm no secret keys or generated local folders are staged.
+Sidekick currently works as an unpacked Chromium extension.
 
-## Troubleshooting
+its still very much a work in progress. theres honestly **a lot of work left** to make it actually feel really smooth, reliable and likeable to use.
 
-Blank popup:
+the basic idea and core stuff is there, but theres still alot i want to improve. i'll be working on that in the future and hopefully make it something that actually feels good to use.
 
-- Re-run `npm run build`.
-- Reload the extension in `chrome://extensions`.
-- Make sure the loaded folder is `dist`, not the repo root.
+for now its mostly just a project i wanted to build because i thought the idea was pretty cool lol.
 
-Notch will not launch:
+its also not on the Chrome Web Store yet.
 
-- Use a normal webpage. Chrome pages like `chrome://extensions` cannot be injected.
-- Refresh the tab after installing or rebuilding the extension.
-- Check that at least one provider is configured, or select Local Ollama and verify connection.
-
-Ollama is offline:
-
-- Start Ollama.
-- Open `http://127.0.0.1:11434/api/tags` in a browser to confirm the server responds.
-- Make sure the model name in Settings matches an installed model.
-
-## Contributing
-
-Pull requests are welcome. Keep the vibe clean, practical, and low-drama. See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## License
-
-MIT. See [LICENSE](LICENSE).
